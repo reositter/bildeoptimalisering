@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Bildeoptimalisering</AssemblyName>
+    <Version>1.0.0</Version>
+    <Company>Jamo</Company>
+    <Product>Bildeoptimalisering for nett</Product>
+    <Description>Komprimerer bilder for opplasting til nettbutikk</Description>
+  </PropertyGroup>
+
+</Project>
