@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(powershell -ExecutionPolicy Bypass -File \"C:\\\\Users\\\\Rene\\\\source\\\\repos\\\\bildeoptimalisering\\\\Compress-Images.ps1\")",
+      "Bash(powershell -ExecutionPolicy Bypass -File \"C:\\\\Users\\\\Rene\\\\source\\\\repos\\\\bildeoptimalisering\\\\Check-Images.ps1\")",
+      "Bash(powershell:*)",
+      "Bash(dotnet new:*)",
+      "Bash(dotnet build:*)",
+      "Bash(dotnet publish:*)",
+      "Bash(dir \"C:\\\\Users\\\\Rene\\\\source\\\\repos\\\\bildeoptimalisering\\\\ImageOptimizer\\\\publish\")",
+      "Bash(start \"\" \"C:\\\\Users\\\\Rene\\\\source\\\\repos\\\\bildeoptimalisering\\\\ImageOptimizer\\\\publish\\\\ImageOptimizer.exe\")",
+      "Bash(dir \"C:\\\\Users\\\\Rene\\\\source\\\\repos\\\\bildeoptimalisering\\\\ImageOptimizer\\\\publish\\\\*.exe\")",
+      "Bash(dir \"C:\\\\Users\\\\Rene\\\\source\\\\repos\\\\bildeoptimalisering\\\\ImageOptimizer.NO\\\\publish\\\\*.exe\")",
+      "Bash(git init:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(gh repo create:*)"
+    ]
+  }
+}
