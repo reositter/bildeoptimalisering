@@ -7,10 +7,20 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>Bildeoptimalisering</AssemblyName>
+    <RootNamespace>ImageOptimizer.NO</RootNamespace>
     <Version>1.0.0</Version>
     <Company>Jamo</Company>
     <Product>Bildeoptimalisering for nett</Product>
     <Description>Komprimerer bilder for opplasting til nettbutikk</Description>
   </PropertyGroup>
+
+  <!-- Samme logikk som den svenske utgaven. Bare skjermtekstene er egne. -->
+  <ItemGroup>
+    <Compile Include="..\ImageOptimizer\ImageOptimization.cs" Link="Core\ImageOptimization.cs" />
+    <Compile Include="..\ImageOptimizer\JpegQuality.cs" Link="Core\JpegQuality.cs" />
+    <Compile Include="..\ImageOptimizer\FilePaths.cs" Link="Core\FilePaths.cs" />
+    <Compile Include="..\ImageOptimizer\BatchProcessor.cs" Link="Core\BatchProcessor.cs" />
+    <Compile Include="..\ImageOptimizer\SettingsStore.cs" Link="Core\SettingsStore.cs" />
+  </ItemGroup>
 
 </Project>

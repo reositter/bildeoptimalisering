@@ -14,9 +14,7 @@ public partial class Form1 : Form
     {
         InitializeComponent();
 
-        // Settings file in same folder as exe
-        var exeFolder = AppDomain.CurrentDomain.BaseDirectory;
-        _settingsPath = Path.Combine(exeFolder, "settings.json");
+        _settingsPath = SettingsStore.ResolvePath("ImageOptimizer");
 
         LoadSettings();
         UpdateMode();
@@ -255,6 +253,14 @@ public partial class Form1 : Form
             var result = await Task.Run(
                 () => BatchProcessor.Run(options, progress, _cancellationTokenSource.Token),
                 _cancellationTokenSource.Token);
+
+            if (result.TotalImages == 0)
+            {
+                lblStatus.Text = "Inga bilder hittades.";
+                lblStatus.ForeColor = Color.Red;
+                Warn("Inga bilder hittades i originalmappen!");
+                return;
+            }
 
             if (result.Cancelled)
             {

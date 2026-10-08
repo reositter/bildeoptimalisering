@@ -1,232 +1,547 @@
 # Compress-Images.ps1
-# Komprimerer bilder for web og bevarer filstruktur
+# Komprimerer bilder for web, med samme regler som ImageOptimizer.exe:
+# bare bilder som faktisk blir mindre uten a bli darligere endres.
+#
+#   .\Compress-Images.ps1 -Source "W:\Images" -Destination "W:\Images_optimized"
+#   .\Compress-Images.ps1 -Source "W:\Images" -Overwrite -BackupFolder "W:\Images_backup"
+#   .\Compress-Images.ps1 -Source "W:\Images" -Overwrite -WhatIf
 
+[CmdletBinding()]
 param(
-    [int]$JpegQuality = 75,        # JPEG kvalitet (1-100, lavere = mindre fil)
-    [int]$MaxWidth = 1920,          # Maks bredde i piksler (0 = ingen resize)
-    [int]$MaxHeight = 1080,         # Maks høyde i piksler (0 = ingen resize)
-    [switch]$WhatIf                 # Simuler uten å gjøre endringer
+    [Parameter(Mandatory = $true)]
+    [string]$Source,
+
+    # Malmappe. Kreves nar -Overwrite ikke er satt.
+    [string]$Destination,
+
+    # Erstatt originalene pa plass i stedet for a skrive til en malmappe.
+    [switch]$Overwrite,
+
+    # Mappe for sikkerhetskopier. Speiler filnavn og mappestruktur fra -Source.
+    [string]$BackupFolder,
+
+    [ValidateRange(30, 100)]
+    [int]$Quality = 75,
+
+    # Hvor mye mindre filen ma bli for at omkodingen skal vaere verdt en generasjon tap.
+    [ValidateRange(1, 90)]
+    [int]$MinGainPercent = 10,
+
+    # Analyser og rapporter uten a rore en eneste fil.
+    [switch]$WhatIf
 )
 
 Add-Type -AssemblyName System.Drawing
 
-# Konfigurasjon - kilde og destinasjonsmapper
-$mappings = @(
-    @{
-        Source = "C:\jamo\ONIT.Images org"
-        Destination = "C:\jamo\ONIT.Images"
-    },
-    @{
-        Source = "C:\jamo\ProductPictures org"
-        Destination = "C:\jamo\ProductPictures"
-    }
+$ErrorActionPreference = 'Stop'
+
+$script:ImageExtensions = @('.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff', '.tif')
+$script:SupportedExtensions = @('.jpg', '.jpeg', '.png')
+
+# Standardtabeller fra JPEG-spesifikasjonen (Annex K), i naturlig rekkefolge.
+$script:StandardLuminance = @(
+    16, 11, 10, 16, 24, 40, 51, 61,
+    12, 12, 14, 19, 26, 58, 60, 55,
+    14, 13, 16, 24, 40, 57, 69, 56,
+    14, 17, 22, 29, 51, 87, 80, 62,
+    18, 22, 37, 56, 68, 109, 103, 77,
+    24, 35, 55, 64, 81, 104, 113, 92,
+    49, 64, 78, 87, 103, 121, 120, 101,
+    72, 92, 95, 98, 112, 100, 103, 99
 )
 
-# Bildeutvidelser som skal behandles
-$imageExtensions = @('.jpg', '.jpeg', '.png', '.bmp', '.gif', '.tiff', '.tif')
+$script:StandardChrominance = @(
+    17, 18, 24, 47, 99, 99, 99, 99,
+    18, 21, 26, 66, 99, 99, 99, 99,
+    24, 26, 56, 99, 99, 99, 99, 99,
+    47, 66, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99,
+    99, 99, 99, 99, 99, 99, 99, 99
+)
 
-function Get-ImageEncoder {
-    param([string]$MimeType)
-    $codecs = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders()
-    return $codecs | Where-Object { $_.MimeType -eq $MimeType }
-}
+# Tabellen i filen ligger i siksakrekkefolge; posten pa plass k horer hjemme pa Zigzag[k].
+$script:Zigzag = @(
+    0, 1, 8, 16, 9, 2, 3, 10,
+    17, 24, 32, 25, 18, 11, 4, 5,
+    12, 19, 26, 33, 40, 48, 41, 34,
+    27, 20, 13, 6, 7, 14, 21, 28,
+    35, 42, 49, 56, 57, 50, 43, 36,
+    29, 22, 15, 23, 30, 37, 44, 51,
+    58, 59, 52, 45, 38, 31, 39, 46,
+    53, 60, 61, 54, 47, 55, 62, 63
+)
 
-function Compress-Image {
-    param(
-        [string]$SourcePath,
-        [string]$DestinationPath,
-        [int]$Quality,
-        [int]$MaxW,
-        [int]$MaxH
-    )
+function Get-QuantizationTables {
+    param([byte[]]$Data)
 
-    try {
-        # Last inn original bilde
-        $image = [System.Drawing.Image]::FromFile($SourcePath)
+    $tables = @()
+    if ($Data.Length -lt 4 -or $Data[0] -ne 0xFF -or $Data[1] -ne 0xD8) { return $tables }
 
-        # Beregn ny størrelse hvis nødvendig
-        $newWidth = $image.Width
-        $newHeight = $image.Height
+    $position = 2
+    while ($position + 1 -lt $Data.Length) {
+        if ($Data[$position] -ne 0xFF) { $position++; continue }
 
-        if ($MaxW -gt 0 -and $MaxH -gt 0) {
-            if ($image.Width -gt $MaxW -or $image.Height -gt $MaxH) {
-                $ratioX = $MaxW / $image.Width
-                $ratioY = $MaxH / $image.Height
-                $ratio = [Math]::Min($ratioX, $ratioY)
+        $marker = $Data[$position + 1]
+        $position += 2
 
-                $newWidth = [int]($image.Width * $ratio)
-                $newHeight = [int]($image.Height * $ratio)
+        # Fyllbyte: neste byte er markoren.
+        if ($marker -eq 0xFF) { $position--; continue }
 
-                # Säkerställ minst 1 pixel (undvik 0x0)
-                if ($newWidth -lt 1) { $newWidth = 1 }
-                if ($newHeight -lt 1) { $newHeight = 1 }
+        # Markorer uten lengdefelt.
+        if ($marker -eq 0xD8 -or $marker -eq 0x01 -or ($marker -ge 0xD0 -and $marker -le 0xD7)) { continue }
+
+        # Slutt pa bildet, eller bildedata tar over.
+        if ($marker -eq 0xD9 -or $marker -eq 0xDA) { break }
+
+        if ($position + 1 -ge $Data.Length) { break }
+        $length = ($Data[$position] -shl 8) -bor $Data[$position + 1]
+        if ($length -lt 2 -or $position + $length -gt $Data.Length) { break }
+
+        if ($marker -eq 0xDB) {
+            $end = $position + $length
+            $cursor = $position + 2
+
+            while ($cursor -lt $end) {
+                $precision = $Data[$cursor] -shr 4
+                $id = $Data[$cursor] -band 0x0F
+                $cursor++
+
+                $size = if ($precision -eq 0) { 64 } else { 128 }
+                if ($cursor + $size -gt $end) { break }
+
+                $table = New-Object int[] 64
+                for ($i = 0; $i -lt 64; $i++) {
+                    $table[$script:Zigzag[$i]] = if ($precision -eq 0) {
+                        $Data[$cursor + $i]
+                    } else {
+                        ($Data[$cursor + $i * 2] -shl 8) -bor $Data[$cursor + $i * 2 + 1]
+                    }
+                }
+
+                $tables += , @{ Id = $id; Table = $table }
+                $cursor += $size
             }
         }
 
-        # Opprett destinasjonsmappe hvis den ikke finnes
-        $destDir = [System.IO.Path]::GetDirectoryName($DestinationPath)
-        if (-not (Test-Path $destDir)) {
-            New-Item -ItemType Directory -Path $destDir -Force | Out-Null
+        $position += $length
+    }
+
+    return $tables
+}
+
+function Get-JpegQuality {
+    <#
+        .SYNOPSIS
+        Anslar hvilken kvalitet en JPEG allerede er lagret med. $null nar det ikke lar seg lese ut.
+    #>
+    param([byte[]]$Data)
+
+    $tables = Get-QuantizationTables -Data $Data
+    if ($tables.Count -eq 0) { return $null }
+
+    $bestQuality = 0
+    $bestError = [double]::MaxValue
+
+    for ($quality = 1; $quality -le 100; $quality++) {
+        $scale = if ($quality -lt 50) { [int](5000 / $quality) } else { 200 - $quality * 2 }
+        $totalError = 0.0
+
+        foreach ($entry in $tables) {
+            $reference = if ($entry.Id -eq 0) { $script:StandardLuminance } else { $script:StandardChrominance }
+            $table = $entry.Table
+
+            for ($i = 0; $i -lt 64; $i++) {
+                $expected = [Math]::Max(1, [Math]::Min(255, [int](($reference[$i] * $scale + 50) / 100)))
+                $difference = $expected - $table[$i]
+                $totalError += [double]$difference * $difference
+            }
         }
 
-        # Opprett nytt bilde med riktig størrelse (använd RGB-format för kompatibilitet med CMYK)
-        $bitmap = New-Object System.Drawing.Bitmap($newWidth, $newHeight, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+        if ($totalError -lt $bestError) {
+            $bestError = $totalError
+            $bestQuality = $quality
+        }
+    }
+
+    # Avvik over dette betyr at tabellene ikke er skalerte standardtabeller.
+    $rootMeanSquareError = [Math]::Sqrt($bestError / ($tables.Count * 64))
+    if ($rootMeanSquareError -gt 12.0) { return $null }
+
+    return $bestQuality
+}
+
+function Get-ImageEncoder {
+    param([string]$MimeType)
+    return [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq $MimeType }
+}
+
+function Get-ExifOrientation {
+    param($Image)
+
+    try {
+        if ($Image.PropertyIdList -notcontains 0x0112) { return 1 }
+        $property = $Image.GetPropertyItem(0x0112)
+        if ($null -eq $property -or $property.Value.Length -lt 2) { return 1 }
+        return [BitConverter]::ToUInt16($property.Value, 0)
+    }
+    catch {
+        return 1
+    }
+}
+
+function Invoke-ImageAnalysis {
+    <#
+        .SYNOPSIS
+        Avgjor om bildet kan gjores mindre uten a bli darligere, og koder det om i sa fall.
+        Returnerer Outcome, OriginalBytes, NewBytes, Data og SourceQuality.
+    #>
+    param(
+        [byte[]]$Original,
+        [string]$Extension,
+        [int]$TargetQuality,
+        [int]$MinGain
+    )
+
+    $result = @{
+        Outcome       = 'Failed'
+        OriginalBytes = $Original.Length
+        NewBytes      = $Original.Length
+        Data          = $null
+        SourceQuality = $null
+        Error         = $null
+    }
+
+    $extension = $Extension.ToLowerInvariant()
+    if ($script:SupportedExtensions -notcontains $extension) {
+        $result.Outcome = 'Unsupported'
+        return $result
+    }
+
+    $isJpeg = $extension -eq '.jpg' -or $extension -eq '.jpeg'
+
+    $stream = $null; $image = $null; $bitmap = $null; $graphics = $null; $output = $null
+    try {
+        $stream = New-Object System.IO.MemoryStream (, $Original)
+        $image = [System.Drawing.Image]::FromStream($stream, $false, $true)
+
+        # Animerte bilder mister alle rammer unntatt den forste ved omkoding.
+        try {
+            $frames = $image.GetFrameCount([System.Drawing.Imaging.FrameDimension]::Time)
+        }
+        catch {
+            $frames = 1
+        }
+        if ($frames -gt 1) { $result.Outcome = 'Animated'; return $result }
+
+        # EXIF-rotasjon folger ikke med, og bildet ville blitt vist dreid.
+        if ((Get-ExifOrientation -Image $image) -gt 1) { $result.Outcome = 'Rotated'; return $result }
+
+        if ($isJpeg) {
+            $sourceQuality = Get-JpegQuality -Data $Original
+            $result.SourceQuality = $sourceQuality
+            if ($null -ne $sourceQuality -and $sourceQuality -le $TargetQuality) {
+                $result.Outcome = 'AlreadyOptimal'
+                return $result
+            }
+        }
+
+        $bitmap = New-Object System.Drawing.Bitmap $image.Width, $image.Height, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
         $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
 
-        # Fyll med vit bakgrund (viktigt för CMYK-bilder och transparens)
-        $graphics.Clear([System.Drawing.Color]::White)
+        # Hvit bunn bare for JPEG, som mangler alfakanal. En gjennomsiktig PNG skal forbli gjennomsiktig.
+        if ($isJpeg) { $graphics.Clear([System.Drawing.Color]::White) }
 
         $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
         $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
         $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
         $graphics.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
-        $graphics.DrawImage($image, 0, 0, $newWidth, $newHeight)
+        $graphics.DrawImage($image, 0, 0, $image.Width, $image.Height)
+        $graphics.Dispose(); $graphics = $null
 
-        # Hent filutvidelse
-        $extension = [System.IO.Path]::GetExtension($DestinationPath).ToLower()
+        $output = New-Object System.IO.MemoryStream
 
-        if ($extension -eq '.jpg' -or $extension -eq '.jpeg') {
-            # Komprimert JPEG
-            $encoder = Get-ImageEncoder -MimeType "image/jpeg"
-            $encoderParams = New-Object System.Drawing.Imaging.EncoderParameters(1)
-            $encoderParams.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter(
-                [System.Drawing.Imaging.Encoder]::Quality, $Quality
-            )
-            $bitmap.Save($DestinationPath, $encoder, $encoderParams)
-        }
-        elseif ($extension -eq '.png') {
-            # PNG med komprimering
-            $bitmap.Save($DestinationPath, [System.Drawing.Imaging.ImageFormat]::Png)
+        if ($isJpeg) {
+            $encoder = Get-ImageEncoder -MimeType 'image/jpeg'
+            $encoderParams = New-Object System.Drawing.Imaging.EncoderParameters 1
+            $encoderParams.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter (
+                [System.Drawing.Imaging.Encoder]::Quality, [long]$TargetQuality)
+            $bitmap.Save($output, $encoder, $encoderParams)
+            $encoderParams.Dispose()
         }
         else {
-            # Andre formater - konverter til JPEG for bedre komprimering
-            $jpegPath = [System.IO.Path]::ChangeExtension($DestinationPath, ".jpg")
-            $encoder = Get-ImageEncoder -MimeType "image/jpeg"
-            $encoderParams = New-Object System.Drawing.Imaging.EncoderParameters(1)
-            $encoderParams.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter(
-                [System.Drawing.Imaging.Encoder]::Quality, $Quality
-            )
-            $bitmap.Save($jpegPath, $encoder, $encoderParams)
-            $DestinationPath = $jpegPath
+            $bitmap.Save($output, [System.Drawing.Imaging.ImageFormat]::Png)
         }
 
-        # Rydd opp
-        $graphics.Dispose()
-        $bitmap.Dispose()
-        $image.Dispose()
+        $encoded = $output.ToArray()
 
-        # Hent filstørrelser
-        $originalSize = (Get-Item $SourcePath).Length
-        $newSize = (Get-Item $DestinationPath).Length
-        $savings = [math]::Round((1 - ($newSize / $originalSize)) * 100, 1)
+        # Gevinsten ma overstige terskelen, ellers er originalet det bedre valget.
+        $limit = $Original.Length * (100.0 - $MinGain) / 100.0
+        if ($encoded.Length -ge $limit) {
+            $result.Outcome = 'NoGain'
+            return $result
+        }
 
-        return @{
-            Success = $true
-            OriginalSize = $originalSize
-            NewSize = $newSize
-            Savings = $savings
+        $result.Outcome = 'Optimized'
+        $result.NewBytes = $encoded.Length
+        $result.Data = $encoded
+        return $result
+    }
+    catch {
+        $result.Outcome = 'Failed'
+        $result.Error = $_.Exception.Message
+        return $result
+    }
+    finally {
+        if ($graphics) { $graphics.Dispose() }
+        if ($bitmap) { $bitmap.Dispose() }
+        if ($image) { $image.Dispose() }
+        if ($stream) { $stream.Dispose() }
+        if ($output) { $output.Dispose() }
+    }
+}
+
+function Get-RelativePath {
+    # .NET Framework, som Windows PowerShell 5.1 kjorer pa, har ingen Path.GetRelativePath.
+    param([string]$Root, [string]$Path)
+
+    $normalizedRoot = [System.IO.Path]::GetFullPath($Root).TrimEnd('')
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+
+    if (-not $fullPath.StartsWith($normalizedRoot + '', [StringComparison]::OrdinalIgnoreCase)) {
+        return [System.IO.Path]::GetFileName($fullPath)
+    }
+
+    return $fullPath.Substring($normalizedRoot.Length + 1)
+}
+
+function Write-FileAtomic {
+    <#
+        .SYNOPSIS
+        Skriver via en midlertidig fil i samme mappe og bytter navn, slik at et avbrudd
+        aldri etterlater et halvskrevet bilde.
+    #>
+    param([string]$Path, [byte[]]$Data)
+
+    $directory = Split-Path -Parent $Path
+    if ($directory -and -not (Test-Path -LiteralPath $directory)) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+
+    $temporaryPath = "$Path.optimizing.tmp"
+    try {
+        [System.IO.File]::WriteAllBytes($temporaryPath, $Data)
+
+        if (Test-Path -LiteralPath $Path) {
+            # Replace bytter innholdet i ett steg; Move uten overskriving finnes ikke her.
+            [System.IO.File]::Replace($temporaryPath, $Path, [NullString]::Value)
+        }
+        else {
+            [System.IO.File]::Move($temporaryPath, $Path)
         }
     }
     catch {
-        return @{
-            Success = $false
-            Error = $_.Exception.Message
+        if (Test-Path -LiteralPath $temporaryPath) {
+            Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
         }
+        throw
     }
 }
 
-function Format-FileSize {
-    param([long]$Size)
-    if ($Size -ge 1MB) { return "{0:N2} MB" -f ($Size / 1MB) }
-    if ($Size -ge 1KB) { return "{0:N2} KB" -f ($Size / 1KB) }
-    return "$Size bytes"
+function Backup-Original {
+    <#
+        .SYNOPSIS
+        Kopierer originalet til backupmappen. En kopi som alt finnes rores ikke - den er
+        originalet fra en tidligere kjoring, og skal ikke erstattes av et komprimert bilde.
+    #>
+    param([string]$SourcePath, [string]$BackupPath)
+
+    if (Test-Path -LiteralPath $BackupPath) { return }
+
+    $directory = Split-Path -Parent $BackupPath
+    if ($directory -and -not (Test-Path -LiteralPath $directory)) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+
+    Copy-Item -LiteralPath $SourcePath -Destination $BackupPath
 }
 
-# Hovedlogikk
-$totalOriginal = 0
-$totalNew = 0
-$processedCount = 0
-$errorCount = 0
+function Test-IsInside {
+    param([string]$Root, [string]$Path)
 
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  Bildekomprimering for Web" -ForegroundColor Cyan
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host ""
-Write-Host "Innstillinger:" -ForegroundColor Yellow
-Write-Host "  JPEG Kvalitet: $JpegQuality%"
-Write-Host "  Maks bredde:   $(if($MaxWidth -eq 0){'Ingen grense'}else{"$MaxWidth px"})"
-Write-Host "  Maks hoyde:    $(if($MaxHeight -eq 0){'Ingen grense'}else{"$MaxHeight px"})"
-Write-Host ""
+    $normalizedRoot = [System.IO.Path]::GetFullPath($Root).TrimEnd('\')
+    $normalizedPath = [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
 
-foreach ($mapping in $mappings) {
-    $source = $mapping.Source
-    $destination = $mapping.Destination
+    if ($normalizedRoot -eq $normalizedPath) { return $true }
+    return $normalizedPath.StartsWith($normalizedRoot + '\', [StringComparison]::OrdinalIgnoreCase)
+}
 
-    Write-Host "Behandler: $source" -ForegroundColor Green
-    Write-Host "       ->  $destination" -ForegroundColor Green
+# ---------------------------------------------------------------- validering
+
+if (-not (Test-Path -LiteralPath $Source)) {
+    throw "Originalmappen finnes ikke: $Source"
+}
+
+$Source = [System.IO.Path]::GetFullPath($Source)
+
+if (-not $Overwrite) {
+    if (-not $Destination) {
+        throw "Angi -Destination, eller bruk -Overwrite for a erstatte originalene."
+    }
+    $Destination = [System.IO.Path]::GetFullPath($Destination)
+    if (Test-IsInside -Root $Source -Path $Destination) {
+        throw "Malmappen kan ikke ligge i originalmappen: $Destination"
+    }
+}
+
+$useBackup = $false
+if ($Overwrite -and $BackupFolder) {
+    $BackupFolder = [System.IO.Path]::GetFullPath($BackupFolder)
+    if (Test-IsInside -Root $Source -Path $BackupFolder) {
+        throw "Backupmappen kan ikke ligge i originalmappen: $BackupFolder"
+    }
+    $useBackup = $true
+}
+
+if ($Overwrite -and -not $useBackup -and -not $WhatIf) {
     Write-Host ""
-
-    if (-not (Test-Path $source)) {
-        Write-Host "  ADVARSEL: Kildemappen finnes ikke: $source" -ForegroundColor Yellow
-        continue
+    Write-Host "ADVARSEL: originalene i $Source skrives over uten sikkerhetskopi." -ForegroundColor Red
+    Write-Host "Angi -BackupFolder for a ta vare pa dem. Endringen kan ikke angres." -ForegroundColor Red
+    $answer = Read-Host "Skriv JA for a fortsette"
+    if ($answer -ne 'JA') {
+        Write-Host "Avbrutt." -ForegroundColor Yellow
+        return
     }
+}
 
-    # Finn alle bilder rekursivt
-    $images = Get-ChildItem -Path $source -Recurse -File |
-        Where-Object { $imageExtensions -contains $_.Extension.ToLower() }
+# ---------------------------------------------------------------- kjoring
 
-    $imageCount = ($images | Measure-Object).Count
-    Write-Host "  Fant $imageCount bilder" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "Bildeoptimalisering" -ForegroundColor Cyan
+Write-Host "  Kilde:       $Source"
+if ($Overwrite) {
+    Write-Host "  Modus:       skriver over originalene" -ForegroundColor Yellow
+    if ($useBackup) { Write-Host "  Backup:      $BackupFolder" }
+} else {
+    Write-Host "  Modus:       kopierer til $Destination"
+}
+Write-Host "  Kvalitet:    $Quality"
+Write-Host "  Min gevinst: $MinGainPercent %"
+if ($WhatIf) { Write-Host "  TESTKJORING - ingen filer endres" -ForegroundColor Magenta }
+Write-Host ""
 
-    $i = 0
-    foreach ($img in $images) {
-        $i++
-        $relativePath = $img.FullName.Substring($source.Length)
-        $destPath = Join-Path $destination $relativePath
+$images = Get-ChildItem -LiteralPath $Source -Recurse -File |
+    Where-Object { $script:ImageExtensions -contains $_.Extension.ToLowerInvariant() }
 
-        Write-Progress -Activity "Komprimerer bilder" -Status "$i av $imageCount - $($img.Name)" -PercentComplete (($i / $imageCount) * 100)
+if ($images.Count -eq 0) {
+    Write-Host "Ingen bilder ble funnet i originalmappen." -ForegroundColor Yellow
+    return
+}
 
-        if ($WhatIf) {
-            Write-Host "  [WhatIf] Ville komprimert: $($img.Name)" -ForegroundColor Gray
+$counts = @{
+    Optimized = 0; AlreadyOptimal = 0; NoGain = 0
+    Animated = 0; Rotated = 0; Unsupported = 0
+    CopiedUnchanged = 0; Failed = 0
+}
+$originalBytes = 0L
+$newBytes = 0L
+$firstError = $null
+$processed = 0
+
+foreach ($image in $images) {
+    $processed++
+    $relativePath = Get-RelativePath -Root $Source -Path $image.FullName
+
+    Write-Progress -Activity "Komprimerer bilder" -Status "$processed/$($images.Count): $relativePath" `
+        -PercentComplete ($processed * 100 / $images.Count)
+
+    try {
+        $original = [System.IO.File]::ReadAllBytes($image.FullName)
+        $analysis = Invoke-ImageAnalysis -Original $original -Extension $image.Extension `
+            -TargetQuality $Quality -MinGain $MinGainPercent
+
+        if ($analysis.Outcome -eq 'Optimized') {
+            if (-not $WhatIf) {
+                if ($Overwrite) {
+                    # Kopien ma ligge pa plass for originalet rores.
+                    if ($useBackup) {
+                        Backup-Original -SourcePath $image.FullName `
+                            -BackupPath (Join-Path $BackupFolder $relativePath)
+                    }
+                    Write-FileAtomic -Path $image.FullName -Data $analysis.Data
+                }
+                else {
+                    Write-FileAtomic -Path (Join-Path $Destination $relativePath) -Data $analysis.Data
+                }
+            }
+
+            $counts.Optimized++
+            $originalBytes += $analysis.OriginalBytes
+            $newBytes += $analysis.NewBytes
+
+            $savedPercent = (1 - $analysis.NewBytes / $analysis.OriginalBytes) * 100
+            Write-Host ("  {0,-55} {1,6:F1} % mindre" -f $relativePath, $savedPercent) -ForegroundColor Green
+
             continue
         }
 
-        $result = Compress-Image -SourcePath $img.FullName -DestinationPath $destPath -Quality $JpegQuality -MaxW $MaxWidth -MaxH $MaxHeight
-
-        if ($result.Success) {
-            $totalOriginal += $result.OriginalSize
-            $totalNew += $result.NewSize
-            $processedCount++
-
-            $origSize = Format-FileSize $result.OriginalSize
-            $newSize = Format-FileSize $result.NewSize
-            Write-Host "  OK: $($img.Name) - $origSize -> $newSize (-$($result.Savings)%)" -ForegroundColor White
+        $counts[$analysis.Outcome]++
+        if ($analysis.Outcome -eq 'Failed' -and -not $firstError) {
+            $firstError = "$relativePath : $($analysis.Error)"
         }
-        else {
-            $errorCount++
-            Write-Host "  FEIL: $($img.Name) - $($result.Error)" -ForegroundColor Red
+
+        # Originalet er det beste vi har. Ved kopiering blir det likevel med,
+        # slik at malmappen blir en komplett speiling.
+        if (-not $Overwrite -and -not $WhatIf) {
+            $destinationPath = Join-Path $Destination $relativePath
+            $directory = Split-Path -Parent $destinationPath
+            if ($directory -and -not (Test-Path -LiteralPath $directory)) {
+                New-Item -ItemType Directory -Path $directory -Force | Out-Null
+            }
+            Copy-Item -LiteralPath $image.FullName -Destination $destinationPath -Force
+            $counts.CopiedUnchanged++
         }
     }
+    catch {
+        $counts.Failed++
+        if (-not $firstError) { $firstError = "$relativePath : $($_.Exception.Message)" }
+    }
+}
 
-    Write-Progress -Activity "Komprimerer bilder" -Completed
+Write-Progress -Activity "Komprimerer bilder" -Completed
+
+$saved = $originalBytes - $newBytes
+$savedMb = [math]::Round($saved / 1MB, 2)
+$savedPercent = if ($originalBytes -gt 0) { (1 - $newBytes / $originalBytes) * 100 } else { 0 }
+
+Write-Host ""
+Write-Host "Resultat" -ForegroundColor Cyan
+if ($WhatIf) { Write-Host "  Testkjoring - ingen filer er endret." -ForegroundColor Magenta }
+Write-Host ("  Optimaliserte bilder: {0}" -f $counts.Optimized)
+Write-Host ("  Spart:                {0} MB ({1:F1} % av disse)" -f $savedMb, $savedPercent)
+Write-Host ""
+Write-Host "  Lot sta urort:"
+Write-Host ("    Allerede pa eller under malkvaliteten: {0}" -f $counts.AlreadyOptimal)
+Write-Host ("    For liten gevinst (under {0} %):        {1}" -f $MinGainPercent, $counts.NoGain)
+if ($counts.Animated -gt 0) { Write-Host ("    Animerte:                              {0}" -f $counts.Animated) }
+if ($counts.Rotated -gt 0) { Write-Host ("    EXIF-roterte:                          {0}" -f $counts.Rotated) }
+if ($counts.Unsupported -gt 0) { Write-Host ("    Formater som ikke kan komprimeres:     {0}" -f $counts.Unsupported) }
+
+if (-not $Overwrite -and -not $WhatIf) {
     Write-Host ""
+    Write-Host ("  Kopiert uendret til malmappen: {0}" -f $counts.CopiedUnchanged)
 }
 
-# Oppsummering
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  Oppsummering" -ForegroundColor Cyan
-Write-Host "========================================" -ForegroundColor Cyan
-Write-Host ""
-Write-Host "  Behandlede bilder: $processedCount" -ForegroundColor White
-Write-Host "  Feil:              $errorCount" -ForegroundColor $(if($errorCount -gt 0){'Red'}else{'White'})
-Write-Host ""
+if ($Overwrite -and $useBackup -and -not $WhatIf -and $counts.Optimized -gt 0) {
+    Write-Host ""
+    Write-Host "  Sikkerhetskopier: $BackupFolder"
+}
 
-if ($processedCount -gt 0) {
-    $totalSavings = [math]::Round((1 - ($totalNew / $totalOriginal)) * 100, 1)
-    Write-Host "  Original storrelse:  $(Format-FileSize $totalOriginal)" -ForegroundColor White
-    Write-Host "  Ny storrelse:        $(Format-FileSize $totalNew)" -ForegroundColor Green
-    Write-Host "  Spart:               $(Format-FileSize ($totalOriginal - $totalNew)) ($totalSavings%)" -ForegroundColor Green
+if ($counts.Failed -gt 0) {
+    Write-Host ""
+    Write-Host ("  Mislyktes: {0}" -f $counts.Failed) -ForegroundColor Red
+    if ($firstError) { Write-Host "  Forste feil: $firstError" -ForegroundColor Red }
 }
 
 Write-Host ""
-Write-Host "Ferdig!" -ForegroundColor Cyan

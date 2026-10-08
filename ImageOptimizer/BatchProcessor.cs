@@ -31,6 +31,7 @@ public sealed class ProcessingResult
     public int Unsupported { get; set; }
     public int CopiedUnchanged { get; set; }
     public int Failed { get; set; }
+    public int TotalImages { get; set; }
     public string? FirstError { get; set; }
     public bool Cancelled { get; set; }
 
@@ -62,16 +63,16 @@ public static class BatchProcessor
     public static ProcessingResult Run(
         ProcessingOptions options,
         IProgress<ProgressUpdate>? progress = null,
+        CancellationToken cancellationToken = default) =>
+        Run(options, FindImages(options.SourceFolder), progress, cancellationToken);
+
+    public static ProcessingResult Run(
+        ProcessingOptions options,
+        IReadOnlyList<string> images,
+        IProgress<ProgressUpdate>? progress = null,
         CancellationToken cancellationToken = default)
     {
-        var result = new ProcessingResult();
-        var images = FindImages(options.SourceFolder);
-
-        if (images.Count == 0)
-        {
-            throw new InvalidOperationException("Inga bilder hittades i originalmappen!");
-        }
-
+        var result = new ProcessingResult { TotalImages = images.Count };
         var completed = 0;
 
         foreach (var sourcePath in images)
@@ -107,12 +108,9 @@ public static class BatchProcessor
 
         if (analysis.Outcome == OptimizationOutcome.Optimized && analysis.Data != null)
         {
-            result.Optimized++;
-            result.OriginalBytes += analysis.OriginalBytes;
-            result.NewBytes += analysis.NewBytes;
-
             if (options.DryRun)
             {
+                CountOptimized(analysis, result);
                 return;
             }
 
@@ -132,6 +130,9 @@ public static class BatchProcessor
                 FilePaths.WriteAtomic(DestinationPathFor(sourcePath, options), analysis.Data);
             }
 
+            // Räknas först när skrivningen är gjord, annars räknas en fil som både
+            // optimerad och misslyckad om skrivningen fallerar.
+            CountOptimized(analysis, result);
             return;
         }
 
@@ -150,6 +151,13 @@ public static class BatchProcessor
             File.Copy(sourcePath, destinationPath, overwrite: true);
             result.CopiedUnchanged++;
         }
+    }
+
+    private static void CountOptimized(OptimizationResult analysis, ProcessingResult result)
+    {
+        result.Optimized++;
+        result.OriginalBytes += analysis.OriginalBytes;
+        result.NewBytes += analysis.NewBytes;
     }
 
     private static void Count(OptimizationResult analysis, string sourcePath, ProcessingResult result)
