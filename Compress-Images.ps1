@@ -371,6 +371,18 @@ function Backup-Original {
     Copy-Item -LiteralPath $SourcePath -Destination $BackupPath
 }
 
+function Protect-CsvValue {
+    <#
+        .SYNOPSIS
+        Et filnavn som begynner med = + - @ blir tolket som en formel nar CSV-en apnes
+        i Excel. En ledende apostrof gjor at verdien vises som ren tekst.
+    #>
+    param([string]$Value)
+
+    if ($Value -match "^[=+\-@`t`r]") { return "'" + $Value }
+    return $Value
+}
+
 function Test-IsInside {
     param([string]$Root, [string]$Path)
 
@@ -467,7 +479,7 @@ foreach ($image in $images) {
             -TargetQuality $Quality -MinGain $MinGainPercent
 
         $report.Add([PSCustomObject]@{
-            Fil            = $relativePath
+            Fil            = Protect-CsvValue $relativePath
             Status         = $analysis.Outcome
             Kvalitet       = $analysis.SourceQuality
             NuvarendeBytes = $analysis.OriginalBytes
