@@ -13,4 +13,8 @@
     <Description>Komprimerar bilder för uppladdning till webshop</Description>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="ImageOptimizer.Tests" />
+  </ItemGroup>
+
 </Project>

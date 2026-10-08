@@ -1,6 +1,5 @@
 using System.Diagnostics;
-using System.Drawing.Drawing2D;
-using System.Drawing.Imaging;
+using System.Text;
 using System.Text.Json;
 
 namespace ImageOptimizer;
@@ -8,8 +7,8 @@ namespace ImageOptimizer;
 public partial class Form1 : Form
 {
     private CancellationTokenSource? _cancellationTokenSource;
-    private readonly string[] _imageExtensions = { ".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tiff", ".tif" };
     private readonly string _settingsPath;
+    private string _lastOpenedFolder = string.Empty;
 
     public Form1()
     {
@@ -20,33 +19,53 @@ public partial class Form1 : Form
         _settingsPath = Path.Combine(exeFolder, "settings.json");
 
         LoadSettings();
+        UpdateMode();
     }
 
     private void LoadSettings()
     {
         try
         {
-            if (File.Exists(_settingsPath))
+            if (!File.Exists(_settingsPath))
             {
-                var json = File.ReadAllText(_settingsPath);
-                var settings = JsonSerializer.Deserialize<AppSettings>(json);
-                if (settings != null)
-                {
-                    if (!string.IsNullOrEmpty(settings.LastSourceFolder) && Directory.Exists(settings.LastSourceFolder))
-                    {
-                        txtSourceFolder.Text = settings.LastSourceFolder;
-                    }
-                    if (!string.IsNullOrEmpty(settings.LastDestFolder))
-                    {
-                        txtDestFolder.Text = settings.LastDestFolder;
-                    }
-                    if (settings.Quality >= 30 && settings.Quality <= 100)
-                    {
-                        trackQuality.Value = settings.Quality;
-                        lblQualityValue.Text = $"{settings.Quality}%";
-                    }
-                }
+                return;
             }
+
+            var json = File.ReadAllText(_settingsPath);
+            var settings = JsonSerializer.Deserialize<AppSettings>(json);
+            if (settings == null)
+            {
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(settings.LastSourceFolder) && Directory.Exists(settings.LastSourceFolder))
+            {
+                txtSourceFolder.Text = settings.LastSourceFolder;
+            }
+
+            if (!string.IsNullOrEmpty(settings.LastDestFolder))
+            {
+                txtDestFolder.Text = settings.LastDestFolder;
+            }
+
+            if (!string.IsNullOrEmpty(settings.BackupFolder))
+            {
+                txtBackupFolder.Text = settings.BackupFolder;
+            }
+
+            if (settings.Quality >= trackQuality.Minimum && settings.Quality <= trackQuality.Maximum)
+            {
+                trackQuality.Value = settings.Quality;
+                lblQualityValue.Text = $"{settings.Quality}%";
+            }
+
+            if (settings.MinGainPercent >= numMinGain.Minimum && settings.MinGainPercent <= numMinGain.Maximum)
+            {
+                numMinGain.Value = settings.MinGainPercent;
+            }
+
+            chkOverwrite.Checked = settings.Overwrite;
+            chkBackup.Checked = settings.Backup;
         }
         catch
         {
@@ -62,7 +81,11 @@ public partial class Form1 : Form
             {
                 LastSourceFolder = txtSourceFolder.Text,
                 LastDestFolder = txtDestFolder.Text,
-                Quality = trackQuality.Value
+                BackupFolder = txtBackupFolder.Text,
+                Quality = trackQuality.Value,
+                MinGainPercent = (int)numMinGain.Value,
+                Overwrite = chkOverwrite.Checked,
+                Backup = chkBackup.Checked
             };
             var json = JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(_settingsPath, json);
@@ -75,14 +98,9 @@ public partial class Form1 : Form
 
     private void Form1_DragEnter(object? sender, DragEventArgs e)
     {
-        if (e.Data?.GetDataPresent(DataFormats.FileDrop) == true)
-        {
-            e.Effect = DragDropEffects.Copy;
-        }
-        else
-        {
-            e.Effect = DragDropEffects.None;
-        }
+        e.Effect = e.Data?.GetDataPresent(DataFormats.FileDrop) == true
+            ? DragDropEffects.Copy
+            : DragDropEffects.None;
     }
 
     private void Form1_DragDrop(object? sender, DragEventArgs e)
@@ -108,20 +126,21 @@ public partial class Form1 : Form
     {
         txtSourceFolder.Text = path;
 
-        // Auto-suggest destination folder
         var parent = Path.GetDirectoryName(path);
         var folderName = Path.GetFileName(path);
-        if (parent != null)
+        if (parent == null)
         {
-            // Remove " org" suffix if present, otherwise add "_optimized"
-            if (folderName.EndsWith(" org", StringComparison.OrdinalIgnoreCase))
-            {
-                txtDestFolder.Text = Path.Combine(parent, folderName[..^4]);
-            }
-            else
-            {
-                txtDestFolder.Text = Path.Combine(parent, folderName + "_optimized");
-            }
+            return;
+        }
+
+        // Remove " org" suffix if present, otherwise add "_optimized"
+        txtDestFolder.Text = folderName.EndsWith(" org", StringComparison.OrdinalIgnoreCase)
+            ? Path.Combine(parent, folderName[..^4])
+            : Path.Combine(parent, folderName + "_optimized");
+
+        if (string.IsNullOrEmpty(txtBackupFolder.Text))
+        {
+            txtBackupFolder.Text = Path.Combine(parent, folderName + "_backup");
         }
     }
 
@@ -131,7 +150,6 @@ public partial class Form1 : Form
         dialog.Description = "Välj mapp med originalbilder";
         dialog.UseDescriptionForTitle = true;
 
-        // Start from last used folder
         if (!string.IsNullOrEmpty(txtSourceFolder.Text) && Directory.Exists(txtSourceFolder.Text))
         {
             dialog.InitialDirectory = txtSourceFolder.Text;
@@ -145,24 +163,38 @@ public partial class Form1 : Form
 
     private void BtnBrowseDest_Click(object? sender, EventArgs e)
     {
+        var selected = BrowseFolder("Välj destinationsmapp för komprimerade bilder", txtDestFolder.Text);
+        if (selected != null)
+        {
+            txtDestFolder.Text = selected;
+        }
+    }
+
+    private void BtnBrowseBackup_Click(object? sender, EventArgs e)
+    {
+        var selected = BrowseFolder("Välj mapp för säkerhetskopior", txtBackupFolder.Text);
+        if (selected != null)
+        {
+            txtBackupFolder.Text = selected;
+        }
+    }
+
+    private static string? BrowseFolder(string description, string current)
+    {
         using var dialog = new FolderBrowserDialog();
-        dialog.Description = "Välj destinationsmapp för komprimerade bilder";
+        dialog.Description = description;
         dialog.UseDescriptionForTitle = true;
 
-        // Start from last used folder
-        if (!string.IsNullOrEmpty(txtDestFolder.Text))
+        if (!string.IsNullOrEmpty(current))
         {
-            var parent = Path.GetDirectoryName(txtDestFolder.Text);
+            var parent = Path.GetDirectoryName(current);
             if (parent != null && Directory.Exists(parent))
             {
                 dialog.InitialDirectory = parent;
             }
         }
 
-        if (dialog.ShowDialog() == DialogResult.OK)
-        {
-            txtDestFolder.Text = dialog.SelectedPath;
-        }
+        return dialog.ShowDialog() == DialogResult.OK ? dialog.SelectedPath : null;
     }
 
     private void TrackQuality_ValueChanged(object? sender, EventArgs e)
@@ -170,48 +202,59 @@ public partial class Form1 : Form
         lblQualityValue.Text = $"{trackQuality.Value}%";
     }
 
+    private void ModeChanged(object? sender, EventArgs e) => UpdateMode();
+
+    private void UpdateMode()
+    {
+        var overwrite = chkOverwrite.Checked;
+
+        grpDest.Enabled = !overwrite;
+        chkBackup.Enabled = overwrite;
+        txtBackupFolder.Enabled = overwrite && chkBackup.Checked;
+        btnBrowseBackup.Enabled = overwrite && chkBackup.Checked;
+
+        if (chkDryRun.Checked)
+        {
+            btnStart.Text = "Analysera (ändrar inget)";
+            btnStart.BackColor = Color.FromArgb(96, 96, 96);
+        }
+        else if (overwrite)
+        {
+            btnStart.Text = "Skriv över originalen";
+            btnStart.BackColor = Color.FromArgb(196, 89, 17);
+        }
+        else
+        {
+            btnStart.Text = "Starta komprimering";
+            btnStart.BackColor = Color.FromArgb(0, 120, 212);
+        }
+    }
+
     private async void BtnStart_Click(object? sender, EventArgs e)
     {
-        // Validate
-        if (string.IsNullOrEmpty(txtSourceFolder.Text))
+        var options = BuildOptions();
+        if (options == null)
         {
-            MessageBox.Show("Välj en originalmapp först!", "Fel", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
 
-        if (string.IsNullOrEmpty(txtDestFolder.Text))
-        {
-            MessageBox.Show("Välj en destinationsmapp först!", "Fel", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
-        }
-
-        if (!Directory.Exists(txtSourceFolder.Text))
-        {
-            MessageBox.Show("Källmappen finns inte!", "Fel", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            return;
-        }
-
-        if (txtSourceFolder.Text.Equals(txtDestFolder.Text, StringComparison.OrdinalIgnoreCase))
-        {
-            MessageBox.Show("Käll- och destinationsmapp kan inte vara samma!", "Fel", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
-        }
-
-        // Save settings
         SaveSettings();
 
-        // Setup UI for processing
         SetProcessingState(true);
         _cancellationTokenSource = new CancellationTokenSource();
 
         try
         {
-            var result = await ProcessImagesAsync(
-                txtSourceFolder.Text,
-                txtDestFolder.Text,
-                trackQuality.Value,
-                _cancellationTokenSource.Token
-            );
+            var progress = new Progress<ProgressUpdate>(update =>
+            {
+                progressBar.Maximum = update.Total;
+                progressBar.Value = Math.Min(update.Completed, update.Total);
+                lblStatus.Text = $"Bearbetar: {update.FileName} ({update.Completed}/{update.Total})";
+            });
+
+            var result = await Task.Run(
+                () => BatchProcessor.Run(options, progress, _cancellationTokenSource.Token),
+                _cancellationTokenSource.Token);
 
             if (result.Cancelled)
             {
@@ -220,28 +263,28 @@ public partial class Form1 : Form
             }
             else
             {
-                lblStatus.Text = $"Klart! {result.ProcessedCount} bilder komprimerade. Sparat {FormatFileSize(result.SavedBytes)} ({result.SavingsPercent:F1}%)";
+                lblStatus.Text = options.DryRun
+                    ? $"Analys klar: {result.Optimized} bilder kan optimeras, {FormatFileSize(result.SavedBytes)} att spara."
+                    : $"Klart! {result.Optimized} bilder optimerade. Sparat {FormatFileSize(result.SavedBytes)}.";
                 lblStatus.ForeColor = Color.Green;
-                btnOpenDest.Enabled = true;
-
-                MessageBox.Show(
-                    $"Komprimering klar!\n\n" +
-                    $"Behandlade bilder: {result.ProcessedCount}\n" +
-                    $"Misslyckade: {result.ErrorCount}\n" +
-                    $"Original storlek: {FormatFileSize(result.OriginalBytes)}\n" +
-                    $"Ny storlek: {FormatFileSize(result.NewBytes)}\n" +
-                    $"Sparat: {FormatFileSize(result.SavedBytes)} ({result.SavingsPercent:F1}%)",
-                    "Klart!",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information
-                );
             }
+
+            _lastOpenedFolder = options.Overwrite ? options.SourceFolder : options.DestinationFolder;
+            btnOpenDest.Enabled = Directory.Exists(_lastOpenedFolder);
+
+            MessageBox.Show(BuildSummary(result, options), options.DryRun ? "Analys" : "Resultat",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (OperationCanceledException)
+        {
+            lblStatus.Text = "Avbruten av användaren.";
+            lblStatus.ForeColor = Color.Orange;
         }
         catch (Exception ex)
         {
-            lblStatus.Text = $"Fel: {ex.Message}";
+            lblStatus.Text = "Fel uppstod.";
             lblStatus.ForeColor = Color.Red;
-            MessageBox.Show($"Ett fel uppstod:\n{ex.Message}", "Fel", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show(ex.Message, "Fel", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         finally
         {
@@ -249,6 +292,153 @@ public partial class Form1 : Form
             _cancellationTokenSource?.Dispose();
             _cancellationTokenSource = null;
         }
+    }
+
+    /// <summary>Validerar valen och bekräftar en överskrivning. Null betyder att körningen inte ska starta.</summary>
+    private ProcessingOptions? BuildOptions()
+    {
+        var source = txtSourceFolder.Text;
+
+        if (string.IsNullOrEmpty(source))
+        {
+            Warn("Välj en originalmapp först!");
+            return null;
+        }
+
+        if (!Directory.Exists(source))
+        {
+            Warn("Originalmappen finns inte!");
+            return null;
+        }
+
+        var overwrite = chkOverwrite.Checked;
+        var dryRun = chkDryRun.Checked;
+        var destination = txtDestFolder.Text;
+        var backupFolder = txtBackupFolder.Text;
+        var backup = overwrite && chkBackup.Checked;
+
+        if (!overwrite)
+        {
+            if (string.IsNullOrEmpty(destination))
+            {
+                Warn("Välj en destinationsmapp först!");
+                return null;
+            }
+
+            if (FilePaths.IsInside(source, destination))
+            {
+                Warn("Destinationsmappen får inte ligga i originalmappen.\n\n" +
+                     "Välj en mapp vid sidan av, eller kryssa i \"Skriv över originalen\".");
+                return null;
+            }
+        }
+
+        if (backup)
+        {
+            if (string.IsNullOrEmpty(backupFolder))
+            {
+                Warn("Välj en mapp för säkerhetskopiorna först!");
+                return null;
+            }
+
+            if (FilePaths.IsInside(source, backupFolder))
+            {
+                Warn("Backupmappen får inte ligga i originalmappen.");
+                return null;
+            }
+        }
+
+        if (overwrite && !dryRun)
+        {
+            var warning = new StringBuilder();
+            warning.AppendLine($"Originalbilderna i {source} skrivs över, inklusive alla undermappar.");
+            warning.AppendLine();
+            warning.AppendLine(backup
+                ? $"Säkerhetskopia tas först till:\n{backupFolder}"
+                : "INGEN säkerhetskopia tas. Ändringen går inte att ångra.");
+            warning.AppendLine();
+            warning.Append("Fortsätt?");
+
+            var answer = MessageBox.Show(warning.ToString(), "Bekräfta överskrivning",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
+
+            if (answer != DialogResult.Yes)
+            {
+                return null;
+            }
+        }
+
+        return new ProcessingOptions
+        {
+            SourceFolder = source,
+            DestinationFolder = destination,
+            BackupFolder = backupFolder,
+            Overwrite = overwrite,
+            Backup = backup,
+            DryRun = dryRun,
+            Quality = trackQuality.Value,
+            MinGainPercent = (int)numMinGain.Value
+        };
+    }
+
+    private static void Warn(string message) =>
+        MessageBox.Show(message, "Fel", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+
+    private static string BuildSummary(ProcessingResult result, ProcessingOptions options)
+    {
+        var summary = new StringBuilder();
+
+        if (options.DryRun)
+        {
+            summary.AppendLine("Testkörning — inga filer har ändrats.");
+            summary.AppendLine();
+        }
+
+        summary.AppendLine($"Optimerade bilder: {result.Optimized}");
+        summary.AppendLine($"Sparat: {FormatFileSize(result.SavedBytes)} ({result.SavingsPercent:F1}% av dessa)");
+        summary.AppendLine();
+        summary.AppendLine("Lämnade orörda:");
+        summary.AppendLine($"  Redan på eller under målkvaliteten: {result.AlreadyOptimal}");
+        summary.AppendLine($"  För liten vinst (under {options.MinGainPercent}%): {result.NoGain}");
+
+        if (result.Animated > 0)
+        {
+            summary.AppendLine($"  Animerade: {result.Animated}");
+        }
+
+        if (result.Rotated > 0)
+        {
+            summary.AppendLine($"  EXIF-roterade: {result.Rotated}");
+        }
+
+        if (result.Unsupported > 0)
+        {
+            summary.AppendLine($"  Format som inte kan komprimeras säkert: {result.Unsupported}");
+        }
+
+        if (!options.Overwrite && !options.DryRun)
+        {
+            summary.AppendLine();
+            summary.AppendLine($"Kopierade oförändrade till destinationen: {result.CopiedUnchanged}");
+        }
+
+        if (options.Overwrite && options.Backup && !options.DryRun && result.Optimized > 0)
+        {
+            summary.AppendLine();
+            summary.AppendLine($"Säkerhetskopior: {options.BackupFolder}");
+        }
+
+        if (result.Failed > 0)
+        {
+            summary.AppendLine();
+            summary.AppendLine($"Misslyckade: {result.Failed}");
+            if (result.FirstError != null)
+            {
+                summary.AppendLine($"Första felet: {result.FirstError}");
+            }
+        }
+
+        return summary.ToString();
     }
 
     private void BtnCancel_Click(object? sender, EventArgs e)
@@ -259,131 +449,26 @@ public partial class Form1 : Form
 
     private void BtnOpenDest_Click(object? sender, EventArgs e)
     {
-        if (Directory.Exists(txtDestFolder.Text))
+        if (Directory.Exists(_lastOpenedFolder))
         {
-            Process.Start("explorer.exe", txtDestFolder.Text);
+            Process.Start("explorer.exe", _lastOpenedFolder);
         }
     }
 
     private void SetProcessingState(bool processing)
     {
         btnStart.Enabled = !processing;
-        btnBrowseSource.Enabled = !processing;
-        btnBrowseDest.Enabled = !processing;
-        trackQuality.Enabled = !processing;
         btnCancel.Enabled = processing;
+        grpSource.Enabled = !processing;
+        grpDest.Enabled = !processing && !chkOverwrite.Checked;
+        grpSettings.Enabled = !processing;
+        grpOverwrite.Enabled = !processing;
 
         if (processing)
         {
             progressBar.Value = 0;
-            lblStatus.Text = "Förbereder...";
             lblStatus.ForeColor = Color.Black;
-            btnOpenDest.Enabled = false;
         }
-    }
-
-    private async Task<ProcessingResult> ProcessImagesAsync(string sourceFolder, string destFolder, int quality, CancellationToken cancellationToken)
-    {
-        var result = new ProcessingResult();
-
-        // Find all images
-        var images = Directory.GetFiles(sourceFolder, "*.*", SearchOption.AllDirectories)
-            .Where(f => _imageExtensions.Contains(Path.GetExtension(f).ToLower()))
-            .ToList();
-
-        if (images.Count == 0)
-        {
-            throw new Exception("Inga bilder hittades i originalmappen!");
-        }
-
-        progressBar.Maximum = images.Count;
-        var processed = 0;
-
-        foreach (var sourcePath in images)
-        {
-            if (cancellationToken.IsCancellationRequested)
-            {
-                result.Cancelled = true;
-                break;
-            }
-
-            var relativePath = Path.GetRelativePath(sourceFolder, sourcePath);
-            var destPath = Path.Combine(destFolder, relativePath);
-            var fileName = Path.GetFileName(sourcePath);
-
-            lblStatus.Text = $"Bearbetar: {fileName} ({processed + 1}/{images.Count})";
-
-            try
-            {
-                var (originalSize, newSize) = await Task.Run(() => CompressImage(sourcePath, destPath, quality), cancellationToken);
-                result.OriginalBytes += originalSize;
-                result.NewBytes += newSize;
-                result.ProcessedCount++;
-            }
-            catch
-            {
-                result.ErrorCount++;
-            }
-
-            processed++;
-            progressBar.Value = processed;
-            Application.DoEvents();
-        }
-
-        return result;
-    }
-
-    private (long originalSize, long newSize) CompressImage(string sourcePath, string destPath, int quality)
-    {
-        // Ensure destination directory exists
-        var destDir = Path.GetDirectoryName(destPath);
-        if (destDir != null && !Directory.Exists(destDir))
-        {
-            Directory.CreateDirectory(destDir);
-        }
-
-        using var image = Image.FromFile(sourcePath);
-
-        var width = image.Width;
-        var height = image.Height;
-
-        // Create new bitmap with RGB format (handles CMYK images)
-        using var bitmap = new Bitmap(width, height, PixelFormat.Format32bppArgb);
-        using var graphics = Graphics.FromImage(bitmap);
-
-        // Fill with white background (important for CMYK and transparency)
-        graphics.Clear(Color.White);
-
-        graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
-        graphics.SmoothingMode = SmoothingMode.HighQuality;
-        graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
-        graphics.CompositingQuality = CompositingQuality.HighQuality;
-        graphics.DrawImage(image, 0, 0, width, height);
-
-        // Get JPEG encoder
-        var encoder = GetEncoder(ImageFormat.Jpeg);
-        var encoderParams = new EncoderParameters(1);
-        encoderParams.Param[0] = new EncoderParameter(Encoder.Quality, (long)quality);
-
-        // Determine output path (convert non-JPEG to JPEG)
-        var extension = Path.GetExtension(destPath).ToLower();
-        if (extension != ".jpg" && extension != ".jpeg")
-        {
-            destPath = Path.ChangeExtension(destPath, ".jpg");
-        }
-
-        bitmap.Save(destPath, encoder, encoderParams);
-
-        var originalSize = new FileInfo(sourcePath).Length;
-        var newSize = new FileInfo(destPath).Length;
-
-        return (originalSize, newSize);
-    }
-
-    private static ImageCodecInfo GetEncoder(ImageFormat format)
-    {
-        var codecs = ImageCodecInfo.GetImageEncoders();
-        return codecs.First(codec => codec.FormatID == format.Guid);
     }
 
     private static string FormatFileSize(long bytes)
@@ -397,21 +482,14 @@ public partial class Form1 : Form
         return $"{bytes} bytes";
     }
 
-    private class ProcessingResult
-    {
-        public int ProcessedCount { get; set; }
-        public int ErrorCount { get; set; }
-        public long OriginalBytes { get; set; }
-        public long NewBytes { get; set; }
-        public bool Cancelled { get; set; }
-        public long SavedBytes => OriginalBytes - NewBytes;
-        public double SavingsPercent => OriginalBytes > 0 ? (1 - (double)NewBytes / OriginalBytes) * 100 : 0;
-    }
-
-    private class AppSettings
+    private sealed class AppSettings
     {
         public string? LastSourceFolder { get; set; }
         public string? LastDestFolder { get; set; }
+        public string? BackupFolder { get; set; }
         public int Quality { get; set; } = 75;
+        public int MinGainPercent { get; set; } = 10;
+        public bool Overwrite { get; set; }
+        public bool Backup { get; set; } = true;
     }
 }
