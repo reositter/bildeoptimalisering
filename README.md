@@ -66,7 +66,6 @@ omkodningen blir lika stor eller större och bilden lämnas orörd. Verklig PNG-
 
 # Rapport över varje fil och vad den skulle ge, utan att ändra något
 .\Compress-Images.ps1 -Source "W:\Images" -WhatIf -Overwrite -ReportPath "C:\temp\rapport.csv"
-apport.csv"
 ```
 
 `-ReportPath` skriver en CSV med en rad per bild: status, nuvarande storlek, möjlig storlek och
