@@ -74,9 +74,10 @@ direkt.
 
 Utan `-BackupFolder` frågar skriptet efter en bekräftelse innan det skriver över något.
 
-`Check-Images.ps1` och `Fix-Failed-Images.ps1` är kvar från Jamo-körningen 2026 och har
-hårdkodade sökvägar. `Fix-Failed-Images.ps1` behövs inte längre — CMYK-bilder hanteras numera
-av huvudflödet.
+`jamo\` innehåller två engångsskript från Jamo-körningen i februari 2026, med hårdkodade
+sökvägar till tre specifika filer. `Check-Images.ps1` visade varför de sprack,
+`Fix-Failed-Images.ps1` komprimerade dem med CMYK-knepet. Det knepet ligger numera i
+huvudflödet, så ingen av dem behövs för nytt arbete.
 
 ## Tester
 
