@@ -61,7 +61,7 @@ partial class Form1
 
         txtSourceFolder = new TextBox();
         txtSourceFolder.Location = new Point(15, 28);
-        txtSourceFolder.Size = new Size(440, 23);
+        txtSourceFolder.Size = new Size(415, 23);
         txtSourceFolder.ReadOnly = true;
         txtSourceFolder.AllowDrop = true;
         txtSourceFolder.DragEnter += Form1_DragEnter;
@@ -70,8 +70,8 @@ partial class Form1
 
         btnBrowseSource = new Button();
         btnBrowseSource.Text = "Bla gjennom...";
-        btnBrowseSource.Location = new Point(460, 26);
-        btnBrowseSource.Size = new Size(85, 27);
+        btnBrowseSource.Location = new Point(437, 26);
+        btnBrowseSource.Size = new Size(108, 27);
         btnBrowseSource.Click += BtnBrowseSource_Click;
         grpSource.Controls.Add(btnBrowseSource);
 
@@ -84,14 +84,14 @@ partial class Form1
 
         txtDestFolder = new TextBox();
         txtDestFolder.Location = new Point(15, 28);
-        txtDestFolder.Size = new Size(440, 23);
+        txtDestFolder.Size = new Size(415, 23);
         txtDestFolder.ReadOnly = true;
         grpDest.Controls.Add(txtDestFolder);
 
         btnBrowseDest = new Button();
         btnBrowseDest.Text = "Bla gjennom...";
-        btnBrowseDest.Location = new Point(460, 26);
-        btnBrowseDest.Size = new Size(85, 27);
+        btnBrowseDest.Location = new Point(437, 26);
+        btnBrowseDest.Size = new Size(108, 27);
         btnBrowseDest.Click += BtnBrowseDest_Click;
         grpDest.Controls.Add(btnBrowseDest);
 
@@ -185,15 +185,15 @@ partial class Form1
 
         txtBackupFolder = new TextBox();
         txtBackupFolder.Location = new Point(35, 78);
-        txtBackupFolder.Size = new Size(410, 23);
+        txtBackupFolder.Size = new Size(385, 23);
         txtBackupFolder.ReadOnly = true;
         txtBackupFolder.Enabled = false;
         grpOverwrite.Controls.Add(txtBackupFolder);
 
         btnBrowseBackup = new Button();
         btnBrowseBackup.Text = "Bla gjennom...";
-        btnBrowseBackup.Location = new Point(455, 76);
-        btnBrowseBackup.Size = new Size(90, 27);
+        btnBrowseBackup.Location = new Point(437, 76);
+        btnBrowseBackup.Size = new Size(108, 27);
         btnBrowseBackup.Enabled = false;
         btnBrowseBackup.Click += BtnBrowseBackup_Click;
         grpOverwrite.Controls.Add(btnBrowseBackup);
