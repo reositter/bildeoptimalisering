@@ -28,7 +28,11 @@ param(
     [int]$MinGainPercent = 10,
 
     # Analyser og rapporter uten a rore en eneste fil.
-    [switch]$WhatIf
+    [switch]$WhatIf,
+
+    # Skriv en CSV med hver enkelt fil og hva den ville gitt. Virker i alle moduser,
+    # men er mest nyttig sammen med -WhatIf.
+    [string]$ReportPath
 )
 
 Add-Type -AssemblyName System.Drawing
@@ -448,6 +452,7 @@ $originalBytes = 0L
 $newBytes = 0L
 $firstError = $null
 $processed = 0
+$report = New-Object System.Collections.Generic.List[object]
 
 foreach ($image in $images) {
     $processed++
@@ -460,6 +465,18 @@ foreach ($image in $images) {
         $original = [System.IO.File]::ReadAllBytes($image.FullName)
         $analysis = Invoke-ImageAnalysis -Original $original -Extension $image.Extension `
             -TargetQuality $Quality -MinGain $MinGainPercent
+
+        $report.Add([PSCustomObject]@{
+            Fil            = $relativePath
+            Status         = $analysis.Outcome
+            Kvalitet       = $analysis.SourceQuality
+            NuvarendeBytes = $analysis.OriginalBytes
+            MuligeBytes    = $analysis.NewBytes
+            SparteBytes    = $analysis.OriginalBytes - $analysis.NewBytes
+            SpartProsent   = if ($analysis.OriginalBytes -gt 0) {
+                [math]::Round((1 - $analysis.NewBytes / $analysis.OriginalBytes) * 100, 1)
+            } else { 0 }
+        })
 
         if ($analysis.Outcome -eq 'Optimized') {
             if (-not $WhatIf) {
@@ -509,6 +526,11 @@ foreach ($image in $images) {
     }
 }
 
+if ($ReportPath) {
+    $report | Sort-Object SparteBytes -Descending |
+        Export-Csv -LiteralPath $ReportPath -NoTypeInformation -Encoding UTF8 -UseCulture
+}
+
 Write-Progress -Activity "Komprimerer bilder" -Completed
 
 $saved = $originalBytes - $newBytes
@@ -536,6 +558,11 @@ if (-not $Overwrite -and -not $WhatIf) {
 if ($Overwrite -and $useBackup -and -not $WhatIf -and $counts.Optimized -gt 0) {
     Write-Host ""
     Write-Host "  Sikkerhetskopier: $BackupFolder"
+}
+
+if ($ReportPath) {
+    Write-Host ""
+    Write-Host "  Rapport: $ReportPath"
 }
 
 if ($counts.Failed -gt 0) {

@@ -63,7 +63,14 @@ omkodningen blir lika stor eller större och bilden lämnas orörd. Verklig PNG-
 
 # Kopiera till ny mapp i stället
 .\Compress-Images.ps1 -Source "W:\Images" -Destination "W:\Images_optimized" -Quality 70
+
+# Rapport över varje fil och vad den skulle ge, utan att ändra något
+.\Compress-Images.ps1 -Source "W:\Images" -WhatIf -Overwrite -ReportPath "C:	empapport.csv"
 ```
+
+`-ReportPath` skriver en CSV med en rad per bild: status, nuvarande storlek, möjlig storlek och
+vinst i procent, sorterad med största besparingen överst. Semikolonseparerad, så Excel öppnar den
+direkt.
 
 Utan `-BackupFolder` frågar skriptet efter en bekräftelse innan det skriver över något.
 
