@@ -162,6 +162,11 @@ En PNG som heter `.jpg` behandlas som PNG och förblir PNG. Både webbläsare oc
 innehåll, och filnamnet rörs aldrig, så ingenting bryts. BMP går samma väg, där är omkodningen
 till PNG dessutom tapsfri. GIF och TIFF lämnas orörda — rutor och lager tål ingen omkodning.
 
+Några filer är inga bilder alls. `25615-4.jpg` hos en kund var en 57 KB HTML-sida — en
+nedladdning som gav leverantörens produktsida i stället för bilden, sparad med bildens filnamn.
+Rapporten säger `filen er HTML, ikke et bilde`. Där är det produkten som behöver en ny bild,
+inte filen som behöver komprimeras.
+
 AVIF, HEIC och WebP kan GDI+ inte läsa alls. De lämnas orörda, och rapportens `Anmerkning`-kolumn
 säger vad filen är. Att skriva om dem till riktig JPEG går — WIC läser AVIF och HEIC när Windows
 har kodeken — men det gör filen *större*, inte mindre. Det är en fix för en bild som inte visas,

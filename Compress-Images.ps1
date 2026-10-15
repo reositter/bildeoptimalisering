@@ -260,6 +260,13 @@ function Get-ActualFormat {
         return "ISO-BMFF ($brand)"
     }
 
+    # Noen filer er ikke bilder i det hele tatt: en nedlasting som ga en feilside eller
+    # en produktside i stedet for bildet, lagret med bildets filnavn.
+    $head = [System.Text.Encoding]::ASCII.GetString($Data, 0, [Math]::Min(256, $Data.Length))
+    $head = $head.TrimStart([char]0xEF, [char]0xBB, [char]0xBF, ' ', [char]9, [char]13, [char]10)
+    if ($head -match '^<!DOCTYPE\s+html' -or $head -match '^<html' -or $head -match '^<!--') { return 'HTML' }
+    if ($head -match '^<\?xml') { return 'XML' }
+
     return 'ukjent'
 }
 
@@ -374,6 +381,14 @@ function Invoke-ImageAnalysis {
 
     $extensionIsJpeg = $extension -eq '.jpg' -or $extension -eq '.jpeg'
     $actualFormat = Get-ActualFormat -Data $Original
+
+    # Ikke et bilde. Her er det produktet som trenger et nytt bilde, ikke filen som
+    # trenger komprimering.
+    if ($actualFormat -in @('HTML', 'XML')) {
+        $result.Outcome = 'Unsupported'
+        $result.Error = "filen er $actualFormat, ikke et bilde"
+        return $result
+    }
 
     # Formater GDI+ ikke leser i det hele tatt.
     if ($actualFormat -in @('AVIF', 'HEIC', 'WebP') -or $actualFormat -like 'ISO-BMFF*') {
@@ -747,7 +762,9 @@ if ($FileList) {
     if (-not (Test-Path -LiteralPath $FileList)) { throw "Fant ikke fillista: $FileList" }
 
     $wanted = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
-    foreach ($line in Get-Content -LiteralPath $FileList) {
+    # Uten -Encoding leser Windows PowerShell en fil uten BOM som ANSI, og da blir
+    # ae, oe og aa i filnavnene feil.
+    foreach ($line in Get-Content -LiteralPath $FileList -Encoding UTF8) {
         # Export-Csv setter apostrof foran navn som Excel ville lest som en formel.
         $entry = $line.Trim().Trim('"').TrimStart("'")
         if ($entry) { [void]$wanted.Add($entry) }
