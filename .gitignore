@@ -16,3 +16,12 @@ settings.json
 *.tmp
 *.bak
 *.pdb
+
+# Verktyg som Get-PngTools.ps1 hamtar
+oxipng.exe
+pngquant.exe
+oxipng-LICENSE.txt
+pngquant-COPYRIGHT
+
+# Kundbilder for provning
+testbilder/

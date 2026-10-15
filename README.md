@@ -46,9 +46,9 @@ Undermappar tas alltid med, och mappstrukturen bevaras.
 Filnamn och filändelse ändras aldrig, så referenser från html-sidor fortsätter peka rätt.
 Genomskinlighet i PNG plattas inte mot vit botten.
 
-PNG optimeras i praktiken aldrig — System.Drawing saknar styrning av PNG-komprimeringen, så
-omkodningen blir lika stor eller större och bilden lämnas orörd. Verklig PNG-vinst kräver
-`oxipng` eller `pngquant`.
+PNG klarar inte exe-versionen — System.Drawing saknar styrning av PNG-komprimeringen, så
+omkodningen blir lika stor eller större och bilden lämnas orörd. Skriptet gör det i stället
+med `oxipng` och `pngquant`, se nedan.
 
 ## Skriptet
 
@@ -85,6 +85,40 @@ Utan `-BackupFolder` frågar skriptet efter en bekräftelse innan det skriver ö
 sökvägar till tre specifika filer. `Check-Images.ps1` visade varför de sprack,
 `Fix-Failed-Images.ps1` komprimerade dem med CMYK-knepet. Det knepet ligger numera i
 huvudflödet, så ingen av dem behövs för nytt arbete.
+
+## PNG
+
+Skriptet lämnar PNG orörd tills `oxipng.exe` finns bredvid det eller i PATH. Hämta verktygen en
+gång på en maskin med nät, och kopiera sedan hela mappen till servern:
+
+```powershell
+.\Get-PngTools.ps1 -IncludePngQuant
+```
+
+`oxipng` ensamt är **tapsfritt** — inte en pixel ändras. På grafik och skärmbilder ger det runt
+25 %, på fotografier ofta under tröskeln på 10 %, och då lämnas bilden orörd.
+
+`-LossyPng` lägger till `pngquant`, som drar ner färgdjupet först. Det ger långt mer, och den
+lämnar själv bilder orörda när färgerna inte räcker till `-PngMinQuality` (förval 65) — fotografier
+faller då tillbaka på det tapsfria steget. Tre riktiga produktbilder från zpiderdata, 26 MB
+tillsammans:
+
+| Bild | Tapsfritt | `-LossyPng` |
+|---|---|---|
+| 50-FFB.jpg.png (9,1 MB, 3D-rendering) | under tröskeln | 95 % |
+| 73896-VHF-R.png (9,8 MB, 7360x4912 foto) | under tröskeln | 72 % |
+| AG-løpjakkebak.png (7,3 MB, tygstruktur) | 11 % | 68 % |
+
+Granskade i 100 %-utsnitt: skillnaden syns inte. Transparens behålls, filnamnet ändras aldrig.
+Animerad PNG går förbi `pngquant`, som annars kastar alla rutor utom den första.
+
+```powershell
+# tapsfritt, bara filerna rakt i mappen
+.\Compress-Images.ps1 -Source "C:\zpiderdata\Images" -Overwrite -NoRecurse
+
+# med pngquant, efter en torrkörning som visar vad varje bild ger
+.\Compress-Images.ps1 -Source "C:\zpiderdata\Images" -Overwrite -NoRecurse -LossyPng
+```
 
 ## Tester
 

@@ -30,6 +30,23 @@ param(
     # Ta bare filene som ligger rett i kildemappen. Undermapper hoppes over.
     [switch]$NoRecurse,
 
+    # oxipng gjor PNG mindre uten a endre en eneste piksel. Ligger exe-en ved siden av
+    # skriptet eller i PATH, brukes den av seg selv. Uten den blir PNG liggende urort.
+    [string]$OxipngPath,
+
+    [ValidateRange(0, 6)]
+    [int]$PngEffort = 4,
+
+    # Lar pngquant redusere fargene forst. Den gir langt mer, men er et tap. Bilder der
+    # fargene ikke holder minstekvaliteten lar den sta, sa fotografier faller tilbake
+    # til det tapsfrie steget.
+    [switch]$LossyPng,
+
+    [string]$PngQuantPath,
+
+    [ValidateRange(30, 100)]
+    [int]$PngMinQuality = 65,
+
     # Analyser og rapporter uten a rore en eneste fil.
     [switch]$WhatIf,
 
@@ -198,6 +215,85 @@ function Get-ExifOrientation {
     }
 }
 
+function Resolve-ToolPath {
+    <#
+        .SYNOPSIS
+        Finner et verktoy: oppgitt sti, ellers ved siden av skriptet, ellers i PATH.
+    #>
+    param([string]$Explicit, [string]$FileName)
+
+    if ($Explicit) {
+        if (-not (Test-Path -LiteralPath $Explicit)) { throw "Fant ikke verktoyet: $Explicit" }
+        return (Resolve-Path -LiteralPath $Explicit).Path
+    }
+
+    if ($PSScriptRoot) {
+        $beside = Join-Path $PSScriptRoot $FileName
+        if (Test-Path -LiteralPath $beside) { return $beside }
+    }
+
+    $command = Get-Command $FileName -ErrorAction SilentlyContinue
+    if ($command) { return $command.Source }
+
+    return $null
+}
+
+function Test-IsAnimatedPng {
+    <#
+        .SYNOPSIS
+        En APNG kjennes pa acTL-blokken, som ligger for bildedataene. System.Drawing ser
+        bare forste ramme, sa rammetellingen fanger den ikke opp.
+    #>
+    param([byte[]]$Data)
+
+    $limit = [Math]::Min($Data.Length - 4, 4096)
+    for ($i = 8; $i -lt $limit; $i++) {
+        if ($Data[$i] -eq 0x61 -and $Data[$i + 1] -eq 0x63 -and
+            $Data[$i + 2] -eq 0x54 -and $Data[$i + 3] -eq 0x4C) { return $true }
+    }
+    return $false
+}
+
+function Invoke-PngOptimization {
+    <#
+        .SYNOPSIS
+        Kjorer pngquant og oxipng pa bildet og returnerer de nye bytene. Verktoyene jobber
+        pa fil, sa bildet ma innom disk.
+    #>
+    param([byte[]]$Original)
+
+    $workFolder = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName())
+    New-Item -ItemType Directory -Path $workFolder -Force | Out-Null
+
+    # Et nativt verktoy som skriver til stderr skal ikke stoppe hele kjoringen.
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+
+    try {
+        $workFile = Join-Path $workFolder 'image.png'
+        [System.IO.File]::WriteAllBytes($workFile, $Original)
+
+        # pngquant river fra seg rammene i en APNG, og avslutningskode 99 betyr at
+        # minstekvaliteten ikke ble nadd. I begge tilfeller star originalet igjen.
+        if ($script:PngQuantExe -and -not (Test-IsAnimatedPng -Data $Original)) {
+            $quantFile = Join-Path $workFolder 'quant.png'
+            & $script:PngQuantExe --quality="$($script:PngMinQuality)-90" --speed 3 `
+                --output $quantFile $workFile 2>$null | Out-Null
+            if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $quantFile)) {
+                $workFile = $quantFile
+            }
+        }
+
+        & $script:OxipngExe -o $script:PngEffort -s -q --force $workFile 2>$null | Out-Null
+
+        return [System.IO.File]::ReadAllBytes($workFile)
+    }
+    finally {
+        $ErrorActionPreference = $previousPreference
+        Remove-Item -LiteralPath $workFolder -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Invoke-ImageAnalysis {
     <#
         .SYNOPSIS
@@ -252,6 +348,26 @@ function Invoke-ImageAnalysis {
                 $result.Outcome = 'AlreadyOptimal'
                 return $result
             }
+        }
+
+        # PNG gar til de eksterne verktoyene, som jobber pa originalfilen. En omtegning
+        # gjennom System.Drawing ville bare kastet bort det de har a hente.
+        if (-not $isJpeg -and $script:OxipngExe) {
+            $image.Dispose(); $image = $null
+            $stream.Dispose(); $stream = $null
+
+            $encoded = Invoke-PngOptimization -Original $Original
+
+            $limit = $Original.Length * (100.0 - $MinGain) / 100.0
+            if ($encoded.Length -ge $limit) {
+                $result.Outcome = 'NoGain'
+                return $result
+            }
+
+            $result.Outcome = 'Optimized'
+            $result.NewBytes = $encoded.Length
+            $result.Data = $encoded
+            return $result
         }
 
         $bitmap = New-Object System.Drawing.Bitmap $image.Width, $image.Height, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
@@ -423,6 +539,19 @@ if ($Overwrite -and $BackupFolder) {
     $useBackup = $true
 }
 
+$script:OxipngExe = Resolve-ToolPath -Explicit $OxipngPath -FileName 'oxipng.exe'
+$script:PngQuantExe = $null
+
+if ($LossyPng) {
+    $script:PngQuantExe = Resolve-ToolPath -Explicit $PngQuantPath -FileName 'pngquant.exe'
+    if (-not $script:PngQuantExe) {
+        throw "-LossyPng krever pngquant.exe ved siden av skriptet, i PATH eller oppgitt med -PngQuantPath."
+    }
+    if (-not $script:OxipngExe) {
+        throw "-LossyPng krever ogsa oxipng.exe, som pakker resultatet etter pngquant."
+    }
+}
+
 if ($Overwrite -and -not $useBackup -and -not $WhatIf) {
     Write-Host ""
     Write-Host "ADVARSEL: originalene i $Source skrives over uten sikkerhetskopi." -ForegroundColor Red
@@ -446,6 +575,15 @@ if ($Overwrite) {
     Write-Host "  Modus:       kopierer til $Destination"
 }
 if ($NoRecurse) { Write-Host "  Omfang:      bare filer rett i kildemappen" }
+if ($script:PngQuantExe) {
+    Write-Host ("  PNG:         pngquant (minst {0} %) og oxipng -o {1}" -f $PngMinQuality, $PngEffort)
+}
+elseif ($script:OxipngExe) {
+    Write-Host ("  PNG:         oxipng -o {0}, tapsfritt" -f $PngEffort)
+}
+else {
+    Write-Host "  PNG:         ingen oxipng.exe funnet - PNG lates urort" -ForegroundColor Yellow
+}
 Write-Host "  Kvalitet:    $Quality"
 Write-Host "  Min gevinst: $MinGainPercent %"
 if ($WhatIf) { Write-Host "  TESTKJORING - ingen filer endres" -ForegroundColor Magenta }
