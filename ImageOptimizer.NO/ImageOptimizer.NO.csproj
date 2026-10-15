@@ -17,6 +17,7 @@
   <!-- Samme logikk som den svenske utgaven. Bare skjermtekstene er egne. -->
   <ItemGroup>
     <Compile Include="..\ImageOptimizer\ImageOptimization.cs" Link="Core\ImageOptimization.cs" />
+    <Compile Include="..\ImageOptimizer\ImageFormatDetection.cs" Link="Core\ImageFormatDetection.cs" />
     <Compile Include="..\ImageOptimizer\JpegQuality.cs" Link="Core\JpegQuality.cs" />
     <Compile Include="..\ImageOptimizer\FilePaths.cs" Link="Core\FilePaths.cs" />
     <Compile Include="..\ImageOptimizer\BatchProcessor.cs" Link="Core\BatchProcessor.cs" />

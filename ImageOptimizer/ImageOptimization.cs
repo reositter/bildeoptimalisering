@@ -20,7 +20,7 @@ public enum OptimizationOutcome
     /// <summary>EXIF-rotation som omkodningen inte bär med sig; bilden skulle visas vriden.</summary>
     Rotated,
 
-    /// <summary>Format som inte går att komprimera bättre utan att riskera kvaliteten.</summary>
+    /// <summary>Format som inte går att komprimera säkert — eller en fil som inte är en bild.</summary>
     Unsupported,
 
     Failed
@@ -36,6 +36,8 @@ public sealed class OptimizationResult
     public byte[]? Data { get; init; }
 
     public int? SourceQuality { get; init; }
+
+    /// <summary>Orsaken till utfallet, eller en notering om att innehållet inte stämmer med ändelsen.</summary>
     public string? Error { get; init; }
 
     public long SavedBytes => Outcome == OptimizationOutcome.Optimized ? OriginalBytes - NewBytes : 0;
@@ -71,7 +73,46 @@ public static class ImageOptimization
             return Skip(OptimizationOutcome.Unsupported, original.Length);
         }
 
-        var isJpeg = extension is ".jpg" or ".jpeg";
+        var extensionIsJpeg = extension is ".jpg" or ".jpeg";
+        var detected = ImageFormatDetection.Detect(original);
+
+        // Inte en bild. Här är det produkten som behöver en ny bild, inte filen som behöver
+        // komprimeras.
+        if (detected.Format is DetectedFormat.Html or DetectedFormat.Xml or DetectedFormat.Mhtml)
+        {
+            return Skip(OptimizationOutcome.Unsupported, original.Length,
+                error: FormatMessages.NotAnImage(detected.Name));
+        }
+
+        // Format GDI+ inte läser alls.
+        if (detected.Format is DetectedFormat.Avif or DetectedFormat.Heic or DetectedFormat.WebP
+            or DetectedFormat.IsoBaseMedia)
+        {
+            return Skip(OptimizationOutcome.Unsupported, original.Length,
+                error: FormatMessages.NotReadByGdiPlus(detected.Name));
+        }
+
+        // GIF och TIFF lämnar vi ligga: bildrutor och lager tål ingen omkodning.
+        if (detected.Format is DetectedFormat.Gif or DetectedFormat.Tiff)
+        {
+            return Skip(OptimizationOutcome.Unsupported, original.Length,
+                error: FormatMessages.ContentIs(detected.Name));
+        }
+
+        // Innehållet bestämmer, inte ändelsen. En PNG som heter .jpg förblir PNG — både
+        // webbläsare och GDI+ läser efter innehåll, och filnamnet rörs aldrig. BMP går samma
+        // väg, där är omkodningen till PNG förlustfri.
+        var isJpeg = detected.Format switch
+        {
+            DetectedFormat.Jpeg => true,
+            DetectedFormat.Png => false,
+            DetectedFormat.Bmp => false,
+            _ => extensionIsJpeg
+        };
+
+        var mismatch = detected.Format != DetectedFormat.Unknown && isJpeg != extensionIsJpeg
+            ? FormatMessages.ExtensionDisagrees(detected.Name)
+            : null;
 
         try
         {
@@ -80,12 +121,12 @@ public static class ImageOptimization
 
             if (GetFrameCount(image) > 1)
             {
-                return Skip(OptimizationOutcome.Animated, original.Length);
+                return Skip(OptimizationOutcome.Animated, original.Length, error: mismatch);
             }
 
             if (GetExifOrientation(image) > 1)
             {
-                return Skip(OptimizationOutcome.Rotated, original.Length);
+                return Skip(OptimizationOutcome.Rotated, original.Length, error: mismatch);
             }
 
             int? sourceQuality = null;
@@ -94,7 +135,7 @@ public static class ImageOptimization
                 sourceQuality = JpegQuality.Estimate(original);
                 if (sourceQuality.HasValue && sourceQuality.Value <= targetQuality)
                 {
-                    return Skip(OptimizationOutcome.AlreadyOptimal, original.Length, sourceQuality);
+                    return Skip(OptimizationOutcome.AlreadyOptimal, original.Length, sourceQuality, mismatch);
                 }
             }
 
@@ -104,7 +145,7 @@ public static class ImageOptimization
             var limit = original.Length * (100.0 - minGainPercent) / 100.0;
             if (encoded.Length >= limit)
             {
-                return Skip(OptimizationOutcome.NoGain, original.Length, sourceQuality);
+                return Skip(OptimizationOutcome.NoGain, original.Length, sourceQuality, mismatch);
             }
 
             return new OptimizationResult
@@ -113,7 +154,8 @@ public static class ImageOptimization
                 OriginalBytes = original.Length,
                 NewBytes = encoded.Length,
                 Data = encoded,
-                SourceQuality = sourceQuality
+                SourceQuality = sourceQuality,
+                Error = mismatch
             };
         }
         catch (Exception ex)
@@ -128,13 +170,15 @@ public static class ImageOptimization
         }
     }
 
-    private static OptimizationResult Skip(OptimizationOutcome outcome, long size, int? sourceQuality = null) =>
+    private static OptimizationResult Skip(
+        OptimizationOutcome outcome, long size, int? sourceQuality = null, string? error = null) =>
         new()
         {
             Outcome = outcome,
             OriginalBytes = size,
             NewBytes = size,
-            SourceQuality = sourceQuality
+            SourceQuality = sourceQuality,
+            Error = error
         };
 
     private static byte[] Encode(Image image, bool asJpeg, int quality)

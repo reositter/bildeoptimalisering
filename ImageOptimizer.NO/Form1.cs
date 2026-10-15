@@ -420,6 +420,10 @@ public partial class Form1 : Form
         if (result.Unsupported > 0)
         {
             summary.AppendLine($"  Formater som ikke kan komprimeres trygt: {result.Unsupported}");
+            if (result.FirstUnsupported != null)
+            {
+                summary.AppendLine($"    Forste: {result.FirstUnsupported}");
+            }
         }
 
         if (!options.Overwrite && !options.DryRun)

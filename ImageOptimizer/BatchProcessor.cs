@@ -33,6 +33,9 @@ public sealed class ProcessingResult
     public int Failed { get; set; }
     public int TotalImages { get; set; }
     public string? FirstError { get; set; }
+
+    /// <summary>Första filen som inte gick att komprimera, med orsak. Annars syns bara antalet.</summary>
+    public string? FirstUnsupported { get; set; }
     public bool Cancelled { get; set; }
 
     /// <summary>Summerar enbart de bilder som faktiskt kodades om.</summary>
@@ -178,6 +181,11 @@ public static class BatchProcessor
                 break;
             case OptimizationOutcome.Unsupported:
                 result.Unsupported++;
+                if (analysis.Error != null)
+                {
+                    result.FirstUnsupported ??= $"{Path.GetFileName(sourcePath)}: {analysis.Error}";
+                }
+
                 break;
             case OptimizationOutcome.Failed:
                 result.Failed++;
