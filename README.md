@@ -183,6 +183,36 @@ Taggen är inte att lita på. I ett kundfall hade `937-119232.jpg` orientering 6
 redan rättvända — att följa taggen lade etiketten på sidan. Titta på bilderna innan du väljer
 något annat än `Skip`.
 
+## Hitta filer som inte är bilder
+
+`Find-FakeImages.ps1` går igenom en mapp och listar filerna som bara ser ut som bilder. Den rör
+ingen fil — den läser de första 4 kB av varje och skriver en lista.
+
+```powershell
+.\Find-FakeImages.ps1 -Source "C:\zpiderdata\Images" `
+  -ReportPath "C:\temp\falska.csv" -DeleteListPath "C:\temp\slett.txt"
+```
+
+| Bedömning | Betyder |
+|---|---|
+| **Ikke bilde** | HTML, MHTML, XML, tom eller oläsbar fil. Produkten behöver en ny bild. |
+| **Avkuttet** | JPEG utan slutmarkör eller PNG utan `IEND` — avbruten nedladdning. |
+| **Feil endelse** | Riktigt bildformat, men namnet ljuger. Visas ändå i webbläsaren, ska inte raderas. |
+
+För en sparad webbsida plockas adressen ur `Snapshot-Content-Location`, annars `<title>`, så man
+ser vilken sida som hamnat där i stället för bilden. Två filer hos en kund var produktsidor från
+`elkarainwear.dk` sparade med Chromes "Webbsida, en fil" och döpta till `.jpg` — 1,9 och 3,6 MB.
+
+`-DeleteListPath` skriver bara kategorin *Ikke bilde*, en full sökväg per rad:
+
+```powershell
+Get-Content C:\temp\slett.txt | ForEach-Object { Remove-Item -LiteralPath $_ -WhatIf }
+```
+
+Formatavläsningen är en kopia av `Get-ActualFormat` i `Compress-Images.ps1`. Den dubbleringen är
+avsiktlig: varje skript ska kunna kopieras ensamt till en kundmaskin. Ändras reglerna ska båda
+filerna ändras.
+
 ## Tester
 
 ```
