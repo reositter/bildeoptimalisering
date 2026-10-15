@@ -183,6 +183,10 @@ Taggen är inte att lita på. I ett kundfall hade `937-119232.jpg` orientering 6
 redan rättvända — att följa taggen lade etiketten på sidan. Titta på bilderna innan du väljer
 något annat än `Skip`.
 
+`-Force` hoppar över frågan innan originalen skrivs över utan säkerhetskopia. Den är till för
+körningar där ingen sitter och svarar — schemalagda jobb, fjärrsessioner där prompten inte når
+fram, och fall där backupen redan är tagen på annat sätt.
+
 ## Hitta filer som inte är bilder
 
 `Find-FakeImages.ps1` går igenom en mapp och listar filerna som bara ser ut som bilder. Den rör

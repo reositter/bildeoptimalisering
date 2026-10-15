@@ -67,6 +67,10 @@ param(
     # Analyser og rapporter uten a rore en eneste fil.
     [switch]$WhatIf,
 
+    # Hopp over sporsmalet for overskriving uten sikkerhetskopi. For kjoringer der
+    # ingen sitter og ser pa, og der backupen alt er tatt pa annet vis.
+    [switch]$Force,
+
     # Skriv en CSV med hver enkelt fil og hva den ville gitt. Virker i alle moduser,
     # men er mest nyttig sammen med -WhatIf.
     [string]$ReportPath
@@ -720,7 +724,7 @@ if ($LossyPng) {
     }
 }
 
-if ($Overwrite -and -not $useBackup -and -not $WhatIf) {
+if ($Overwrite -and -not $useBackup -and -not $WhatIf -and -not $Force) {
     Write-Host ""
     Write-Host "ADVARSEL: originalene i $Source skrives over uten sikkerhetskopi." -ForegroundColor Red
     Write-Host "Angi -BackupFolder for a ta vare pa dem. Endringen kan ikke angres." -ForegroundColor Red
