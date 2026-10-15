@@ -35,6 +35,10 @@ param(
     # Ta bare filene som ligger rett i kildemappen. Undermapper hoppes over.
     [switch]$NoRecurse,
 
+    # Tekstfil med en sti per linje, relativt til -Source. Bare de filene behandles,
+    # sa en ny prove slipper a ga gjennom hele mappen pa nytt.
+    [string]$FileList,
+
     # oxipng gjor PNG mindre uten a endre en eneste piksel. Ligger exe-en ved siden av
     # skriptet eller i PATH, brukes den av seg selv. Uten den blir PNG liggende urort.
     [string]$OxipngPath,
@@ -368,15 +372,35 @@ function Invoke-ImageAnalysis {
         return $result
     }
 
-    $isJpeg = $extension -eq '.jpg' -or $extension -eq '.jpeg'
-
-    # Et format GDI+ ikke kjenner skal meldes som det det er, ikke som en uforklart feil.
+    $extensionIsJpeg = $extension -eq '.jpg' -or $extension -eq '.jpeg'
     $actualFormat = Get-ActualFormat -Data $Original
-    $expectedFormat = if ($isJpeg) { 'JPEG' } else { 'PNG' }
-    if ($actualFormat -ne $expectedFormat -and $actualFormat -ne 'ukjent') {
+
+    # Formater GDI+ ikke leser i det hele tatt.
+    if ($actualFormat -in @('AVIF', 'HEIC', 'WebP') -or $actualFormat -like 'ISO-BMFF*') {
         $result.Outcome = 'Unsupported'
-        $result.Error = "innholdet er $actualFormat, ikke $expectedFormat"
+        $result.Error = "innholdet er $actualFormat, som GDI+ ikke leser"
         return $result
+    }
+
+    # GIF og TIFF lar vi ligge: rammer og lag taler ingen omkoding.
+    if ($actualFormat -in @('GIF', 'TIFF')) {
+        $result.Outcome = 'Unsupported'
+        $result.Error = "innholdet er $actualFormat"
+        return $result
+    }
+
+    # Innholdet bestemmer, ikke endelsen. En PNG som heter .jpg skal forbli PNG - bade
+    # nettlesere og GDI+ leser etter innhold, og filnavnet rores aldri. BMP gar samme vei,
+    # der er omkodingen til PNG tapsfri.
+    $isJpeg = switch ($actualFormat) {
+        'JPEG'  { $true }
+        'PNG'   { $false }
+        'BMP'   { $false }
+        default { $extensionIsJpeg }
+    }
+
+    if ($actualFormat -ne 'ukjent' -and $isJpeg -ne $extensionIsJpeg) {
+        $result.Error = "innholdet er $actualFormat, endelsen sier noe annet"
     }
 
     $stream = $null; $image = $null; $bitmap = $null; $graphics = $null; $output = $null
@@ -460,7 +484,8 @@ function Invoke-ImageAnalysis {
 
         # PNG gar til de eksterne verktoyene, som jobber pa originalfilen. En omtegning
         # gjennom System.Drawing ville bare kastet bort det de har a hente.
-        if (-not $isJpeg -and $script:OxipngExe -and -not $isResized -and -not $isRotated) {
+        if (-not $isJpeg -and $actualFormat -eq 'PNG' -and $script:OxipngExe -and
+            -not $isResized -and -not $isRotated) {
             $image.Dispose(); $image = $null
             $stream.Dispose(); $stream = $null
 
@@ -717,6 +742,21 @@ if (-not $NoRecurse) { $searchParameters.Recurse = $true }
 
 $images = Get-ChildItem @searchParameters |
     Where-Object { $script:ImageExtensions -contains $_.Extension.ToLowerInvariant() }
+
+if ($FileList) {
+    if (-not (Test-Path -LiteralPath $FileList)) { throw "Fant ikke fillista: $FileList" }
+
+    $wanted = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    foreach ($line in Get-Content -LiteralPath $FileList) {
+        # Export-Csv setter apostrof foran navn som Excel ville lest som en formel.
+        $entry = $line.Trim().Trim('"').TrimStart("'")
+        if ($entry) { [void]$wanted.Add($entry) }
+    }
+
+    $images = @($images | Where-Object { $wanted.Contains((Get-RelativePath -Root $Source -Path $_.FullName)) })
+    Write-Host ("  Fillista:    {0} av {1} oppforinger funnet" -f $images.Count, $wanted.Count)
+    Write-Host ""
+}
 
 if ($images.Count -eq 0) {
     Write-Host "Ingen bilder ble funnet i originalmappen." -ForegroundColor Yellow

@@ -75,6 +75,15 @@ direkt.
 `-NoRecurse` tar bara bilderna som ligger rakt i källmappen och hoppar över undermapparna.
 Utan den tas undermapparna alltid med.
 
+`-FileList` pekar på en textfil med en sökväg per rad, relativt `-Source`. Bara de filerna
+behandlas, vilket gör att en ny provkörning slipper gå igenom hela mappen. Kolumnen `Fil` ur en
+tidigare rapport duger direkt som lista:
+
+```powershell
+Import-Csv rapport.csv -Delimiter ';' | Where-Object { $_.Status -eq 'Unsupported' } |
+    ForEach-Object { $_.Fil } | Set-Content lista.txt -Encoding UTF8
+```
+
 ```powershell
 .\Compress-Images.ps1 -Source "C:\zpiderdata\Images" -Overwrite -NoRecurse -WhatIf -ReportPath "C:\temp\rapport.csv"
 ```
@@ -145,13 +154,18 @@ Nedskalningen är det som ger mest, och den kräver inga verktyg alls. `73896-VH
 
 ## Bilder som faller ifrån
 
-**Fel innehåll för ändelsen.** `Get-ActualFormat` läser formatet ur de första byten i stället för
-att tro på ändelsen. En AVIF som heter `.jpg` fick tidigare GDI+ att svara `Parameter is not valid`,
-och räknades som ett oförklarat fel. Nu står det i rapportens `Anmerkning`-kolumn vad filen
-faktiskt är, och den lämnas orörd. Hos en kund var 47 av 9293 filer sådana.
+**Fel innehåll för ändelsen.** `Get-ActualFormat` läser formatet ur de första byten, och
+innehållet avgör vad som händer — inte ändelsen. Hos en kund var 948 av 9293 filer felnamngivna,
+varav 872 PNG med `.jpg`-ändelse på tillsammans 369 MB.
 
-Att skriva om dem till riktig JPEG går — WIC läser AVIF och HEIC när Windows har kodeken — men
-det gör filen *större*, inte mindre. Det är en fix för en bild som inte visas, inte för storleken.
+En PNG som heter `.jpg` behandlas som PNG och förblir PNG. Både webbläsare och GDI+ läser efter
+innehåll, och filnamnet rörs aldrig, så ingenting bryts. BMP går samma väg, där är omkodningen
+till PNG dessutom tapsfri. GIF och TIFF lämnas orörda — rutor och lager tål ingen omkodning.
+
+AVIF, HEIC och WebP kan GDI+ inte läsa alls. De lämnas orörda, och rapportens `Anmerkning`-kolumn
+säger vad filen är. Att skriva om dem till riktig JPEG går — WIC läser AVIF och HEIC när Windows
+har kodeken — men det gör filen *större*, inte mindre. Det är en fix för en bild som inte visas,
+inte för storleken.
 
 **CMYK-JPEG.** Valideringen i `FromStream` avvisar dem. Skriptet läser om filen utan validering
 när det händer; GDI+ klarar bilden ändå och omritningen ger ett användbart RGB-bild.
