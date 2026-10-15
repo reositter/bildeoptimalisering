@@ -40,7 +40,7 @@ Undermappar tas alltid med, och mappstrukturen bevaras.
 | Redan på eller under målkvaliteten | JPEG-kvaliteten läses ur kvantiseringstabellerna. Att koda om en q70-bild till q75 ger bara ännu en generation av förluster. |
 | För liten vinst | Nya filen är inte minst N % mindre (förval 10 %). |
 | Animerad | En omkodning skulle kasta alla bildrutor utom den första. |
-| EXIF-rotation | Rotationen följer inte med omkodningen, och bilden skulle visas vriden. `-ApplyExifRotation` vrider pixlarna i stället och tar bort taggen. |
+| EXIF-rotation | Rotationen följer inte med omkodningen, och bilden skulle visas vriden. Se nedan. |
 | Format som inte kan komprimeras säkert | BMP, GIF och TIFF. System.Drawing kan inte göra dem mindre utan att riskera kvaliteten. |
 
 Filnamn och filändelse ändras aldrig, så referenser från html-sidor fortsätter peka rätt.
@@ -143,16 +143,26 @@ Nedskalningen är det som ger mest, och den kräver inga verktyg alls. `73896-VH
 | med `oxipng` | 701 KB |
 | med `-LossyPng` | 202 KB |
 
-## Bilder som tidigare föll ifrån
+## Bilder som faller ifrån
 
-**CMYK-JPEG.** GDI+ avvisar dem i valideringen med `Parameter is not valid`, och de räknades som
-misslyckade. Skriptet läser om bilden utan validering när det händer — GDI+ klarar den ändå, och
-omritningen ger ett användbart RGB-bild. 47 av 9293 bilder hos en kund.
+**Fel innehåll för ändelsen.** `Get-ActualFormat` läser formatet ur de första byten i stället för
+att tro på ändelsen. En AVIF som heter `.jpg` fick tidigare GDI+ att svara `Parameter is not valid`,
+och räknades som ett oförklarat fel. Nu står det i rapportens `Anmerkning`-kolumn vad filen
+faktiskt är, och den lämnas orörd. Hos en kund var 47 av 9293 filer sådana.
 
-**EXIF-roterade.** `-ApplyExifRotation` vrider pixlarna så som taggen säger och sparar utan tagg,
-i stället för att lämna bilden orörd. Resultatet visas likadant oavsett vem som läser det. Prova
-på ett par bilder först: visar sajten dem oroterade i dag, för att den ignorerar taggen, ändrar
-de utseende.
+Att skriva om dem till riktig JPEG går — WIC läser AVIF och HEIC när Windows har kodeken — men
+det gör filen *större*, inte mindre. Det är en fix för en bild som inte visas, inte för storleken.
+
+**CMYK-JPEG.** Valideringen i `FromStream` avvisar dem. Skriptet läser om filen utan validering
+när det händer; GDI+ klarar bilden ändå och omritningen ger ett användbart RGB-bild.
+
+**EXIF-roterade.** Förval `-ExifRotation Skip` lämnar dem orörda, eftersom rotationen inte följer
+med omkodningen. `Apply` vrider pixlarna som taggen säger, `Strip` behåller pixlarna och släpper
+taggen. Båda ändrar hur bilden visas, så de är avstängda som förval.
+
+Taggen är inte att lita på. I ett kundfall hade `937-119232.jpg` orientering 6, men pixlarna låg
+redan rättvända — att följa taggen lade etiketten på sidan. Titta på bilderna innan du väljer
+något annat än `Skip`.
 
 ## Tester
 

@@ -52,9 +52,13 @@ param(
     [ValidateRange(30, 100)]
     [int]$PngMinQuality = 65,
 
-    # Snu bildet slik EXIF sier, i stedet for a la det ligge. Den nye filen har ingen
-    # orienteringstagg, sa bildet viser likt uansett hvem som leser det.
-    [switch]$ApplyExifRotation,
+    # Hva som skal skje med bilder som har en EXIF-orienteringstagg. Den nye filen har
+    # aldri en slik tagg, sa bildet viser likt uansett hvem som leser det.
+    #   Skip   lar bildet ligge urort (forvalg)
+    #   Apply  snur pikslene slik taggen sier
+    #   Strip  beholder pikslene som de er, og dropper taggen
+    [ValidateSet('Skip', 'Apply', 'Strip')]
+    [string]$ExifRotation = 'Skip',
 
     # Analyser og rapporter uten a rore en eneste fil.
     [switch]$WhatIf,
@@ -224,6 +228,37 @@ function Get-ExifOrientation {
     }
 }
 
+function Get-ActualFormat {
+    <#
+        .SYNOPSIS
+        Leser formatet ut av de forste bytene. Filendelsen lyver titt og ofte: en AVIF
+        som heter .jpg far GDI+ til a svare "Parameter is not valid".
+    #>
+    param([byte[]]$Data)
+
+    if ($Data.Length -lt 12) { return 'ukjent' }
+
+    if ($Data[0] -eq 0xFF -and $Data[1] -eq 0xD8 -and $Data[2] -eq 0xFF) { return 'JPEG' }
+    if ($Data[0] -eq 0x89 -and $Data[1] -eq 0x50 -and $Data[2] -eq 0x4E -and $Data[3] -eq 0x47) { return 'PNG' }
+    if ($Data[0] -eq 0x47 -and $Data[1] -eq 0x49 -and $Data[2] -eq 0x46) { return 'GIF' }
+    if ($Data[0] -eq 0x42 -and $Data[1] -eq 0x4D) { return 'BMP' }
+    if (($Data[0] -eq 0x49 -and $Data[1] -eq 0x49 -and $Data[2] -eq 0x2A) -or
+        ($Data[0] -eq 0x4D -and $Data[1] -eq 0x4D -and $Data[3] -eq 0x2A)) { return 'TIFF' }
+
+    $text = [System.Text.Encoding]::ASCII.GetString($Data, 0, 12)
+    if ($text.Substring(0, 4) -eq 'RIFF' -and $text.Substring(8, 4) -eq 'WEBP') { return 'WebP' }
+
+    # ISO-BMFF: ftyp-boksen med merket rett etter.
+    if ($text.Substring(4, 4) -eq 'ftyp') {
+        $brand = $text.Substring(8, 4)
+        if ($brand -like 'avi*') { return 'AVIF' }
+        if ($brand -in @('heic', 'heix', 'hevc', 'mif1', 'msf1')) { return 'HEIC' }
+        return "ISO-BMFF ($brand)"
+    }
+
+    return 'ukjent'
+}
+
 function Resolve-ToolPath {
     <#
         .SYNOPSIS
@@ -335,6 +370,15 @@ function Invoke-ImageAnalysis {
 
     $isJpeg = $extension -eq '.jpg' -or $extension -eq '.jpeg'
 
+    # Et format GDI+ ikke kjenner skal meldes som det det er, ikke som en uforklart feil.
+    $actualFormat = Get-ActualFormat -Data $Original
+    $expectedFormat = if ($isJpeg) { 'JPEG' } else { 'PNG' }
+    if ($actualFormat -ne $expectedFormat -and $actualFormat -ne 'ukjent') {
+        $result.Outcome = 'Unsupported'
+        $result.Error = "innholdet er $actualFormat, ikke $expectedFormat"
+        return $result
+    }
+
     $stream = $null; $image = $null; $bitmap = $null; $graphics = $null; $output = $null
     try {
         $stream = New-Object System.IO.MemoryStream (, $Original)
@@ -363,23 +407,26 @@ function Invoke-ImageAnalysis {
         $isRotated = $false
 
         if ($orientation -gt 1) {
-            if (-not $script:ApplyExifRotation) { $result.Outcome = 'Rotated'; return $result }
+            if ($script:ExifRotation -eq 'Skip') { $result.Outcome = 'Rotated'; return $result }
 
-            $rotation = switch ($orientation) {
-                2 { [System.Drawing.RotateFlipType]::RotateNoneFlipX }
-                3 { [System.Drawing.RotateFlipType]::Rotate180FlipNone }
-                4 { [System.Drawing.RotateFlipType]::Rotate180FlipX }
-                5 { [System.Drawing.RotateFlipType]::Rotate90FlipX }
-                6 { [System.Drawing.RotateFlipType]::Rotate90FlipNone }
-                7 { [System.Drawing.RotateFlipType]::Rotate270FlipX }
-                8 { [System.Drawing.RotateFlipType]::Rotate270FlipNone }
-                default { $null }
+            # Strip lar pikslene sta; taggen forsvinner av seg selv i omkodingen.
+            $rotation = if ($script:ExifRotation -eq 'Strip') { $null } else {
+                switch ($orientation) {
+                    2 { [System.Drawing.RotateFlipType]::RotateNoneFlipX }
+                    3 { [System.Drawing.RotateFlipType]::Rotate180FlipNone }
+                    4 { [System.Drawing.RotateFlipType]::Rotate180FlipX }
+                    5 { [System.Drawing.RotateFlipType]::Rotate90FlipX }
+                    6 { [System.Drawing.RotateFlipType]::Rotate90FlipNone }
+                    7 { [System.Drawing.RotateFlipType]::Rotate270FlipX }
+                    8 { [System.Drawing.RotateFlipType]::Rotate270FlipNone }
+                    default { $null }
+                }
             }
 
-            if ($rotation) {
-                $image.RotateFlip($rotation)
-                $isRotated = $true
-            }
+            if ($rotation) { $image.RotateFlip($rotation) }
+
+            # Bade Apply og Strip skriver en ny fil, og begge skal beholdes.
+            $isRotated = $true
         }
 
         $targetWidth = $image.Width
@@ -703,6 +750,7 @@ foreach ($image in $images) {
             Fil            = Protect-CsvValue $relativePath
             Status         = $analysis.Outcome
             Kvalitet       = $analysis.SourceQuality
+            Anmerkning     = $analysis.Error
             Storrelse      = $analysis.Dimension
             NyStorrelse    = $analysis.NewDimension
             NuvarendeBytes = $analysis.OriginalBytes
