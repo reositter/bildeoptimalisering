@@ -267,6 +267,12 @@ function Get-ActualFormat {
     if ($head -match '^<!DOCTYPE\s+html' -or $head -match '^<html' -or $head -match '^<!--') { return 'HTML' }
     if ($head -match '^<\?xml') { return 'XML' }
 
+    # En hel webside lagret som en fil: Chrome og IE skriver MIME-hoder forst, og
+    # bildene ligger base64-kodet inni. GDI+ svarer "Parameter is not valid".
+    $mime = [System.Text.Encoding]::ASCII.GetString($Data, 0, [Math]::Min(2048, $Data.Length))
+    if ($mime -match '^(From|MIME-Version|Snapshot-Content-Location|Subject|Content-Type):' -and
+        $mime -match '(?im)^(MIME-Version:|Content-Type:\s*multipart/)') { return 'MHTML' }
+
     return 'ukjent'
 }
 
@@ -384,7 +390,7 @@ function Invoke-ImageAnalysis {
 
     # Ikke et bilde. Her er det produktet som trenger et nytt bilde, ikke filen som
     # trenger komprimering.
-    if ($actualFormat -in @('HTML', 'XML')) {
+    if ($actualFormat -in @('HTML', 'XML', 'MHTML')) {
         $result.Outcome = 'Unsupported'
         $result.Error = "filen er $actualFormat, ikke et bilde"
         return $result
