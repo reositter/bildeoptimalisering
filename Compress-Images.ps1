@@ -52,6 +52,10 @@ param(
     [ValidateRange(30, 100)]
     [int]$PngMinQuality = 65,
 
+    # Snu bildet slik EXIF sier, i stedet for a la det ligge. Den nye filen har ingen
+    # orienteringstagg, sa bildet viser likt uansett hvem som leser det.
+    [switch]$ApplyExifRotation,
+
     # Analyser og rapporter uten a rore en eneste fil.
     [switch]$WhatIf,
 
@@ -334,7 +338,15 @@ function Invoke-ImageAnalysis {
     $stream = $null; $image = $null; $bitmap = $null; $graphics = $null; $output = $null
     try {
         $stream = New-Object System.IO.MemoryStream (, $Original)
-        $image = [System.Drawing.Image]::FromStream($stream, $false, $true)
+        try {
+            $image = [System.Drawing.Image]::FromStream($stream, $false, $true)
+        }
+        catch {
+            # Valideringen avviser blant annet CMYK-JPEG med "Parameter is not valid".
+            # Uten den leser GDI+ bildet likevel, og omtegningen gir et brukbart RGB-bilde.
+            $stream.Position = 0
+            $image = [System.Drawing.Image]::FromStream($stream, $false, $false)
+        }
 
         # Animerte bilder mister alle rammer unntatt den forste ved omkoding.
         try {
@@ -345,8 +357,30 @@ function Invoke-ImageAnalysis {
         }
         if ($frames -gt 1) { $result.Outcome = 'Animated'; return $result }
 
-        # EXIF-rotasjon folger ikke med, og bildet ville blitt vist dreid.
-        if ((Get-ExifOrientation -Image $image) -gt 1) { $result.Outcome = 'Rotated'; return $result }
+        # EXIF-rotasjonen folger ikke med omkodingen. Enten snur vi pikslene selv, eller
+        # sa lar vi bildet ligge - ellers ville det blitt vist dreid.
+        $orientation = Get-ExifOrientation -Image $image
+        $isRotated = $false
+
+        if ($orientation -gt 1) {
+            if (-not $script:ApplyExifRotation) { $result.Outcome = 'Rotated'; return $result }
+
+            $rotation = switch ($orientation) {
+                2 { [System.Drawing.RotateFlipType]::RotateNoneFlipX }
+                3 { [System.Drawing.RotateFlipType]::Rotate180FlipNone }
+                4 { [System.Drawing.RotateFlipType]::Rotate180FlipX }
+                5 { [System.Drawing.RotateFlipType]::Rotate90FlipX }
+                6 { [System.Drawing.RotateFlipType]::Rotate90FlipNone }
+                7 { [System.Drawing.RotateFlipType]::Rotate270FlipX }
+                8 { [System.Drawing.RotateFlipType]::Rotate270FlipNone }
+                default { $null }
+            }
+
+            if ($rotation) {
+                $image.RotateFlip($rotation)
+                $isRotated = $true
+            }
+        }
 
         $targetWidth = $image.Width
         $targetHeight = $image.Height
@@ -365,7 +399,7 @@ function Invoke-ImageAnalysis {
         $result.NewDimension = "${targetWidth}x${targetHeight}"
 
         # Kvaliteten sier ingenting nar bildet uansett skal skaleres ned.
-        if ($isJpeg -and -not $isResized) {
+        if ($isJpeg -and -not $isResized -and -not $isRotated) {
             $sourceQuality = Get-JpegQuality -Data $Original
             $result.SourceQuality = $sourceQuality
             if ($null -ne $sourceQuality -and $sourceQuality -le $TargetQuality) {
@@ -379,7 +413,7 @@ function Invoke-ImageAnalysis {
 
         # PNG gar til de eksterne verktoyene, som jobber pa originalfilen. En omtegning
         # gjennom System.Drawing ville bare kastet bort det de har a hente.
-        if (-not $isJpeg -and $script:OxipngExe -and -not $isResized) {
+        if (-not $isJpeg -and $script:OxipngExe -and -not $isResized -and -not $isRotated) {
             $image.Dispose(); $image = $null
             $stream.Dispose(); $stream = $null
 
@@ -433,7 +467,7 @@ function Invoke-ImageAnalysis {
 
         # Er bildet skalert ned, er det storrelsen som er poenget, ikke bytene.
         # Ellers ma gevinsten overstige terskelen for a vaere verdt et tap.
-        if ($isResized) {
+        if ($isResized -or $isRotated) {
             if ($encoded.Length -ge $Original.Length) {
                 $result.Outcome = 'NoGain'
                 return $result
