@@ -120,6 +120,29 @@ Animerad PNG går förbi `pngquant`, som annars kastar alla rutor utom den förs
 .\Compress-Images.ps1 -Source "C:\zpiderdata\Images" -Overwrite -NoRecurse -LossyPng
 ```
 
+## Bildstorlek
+
+`-MaxDimension` sätter ett tak för längsta sidan i pixlar. Bilder som redan är mindre skalas
+aldrig upp, proportionerna behålls, och filnamnet ändras inte. Utan flaggan rörs aldrig
+bildstorleken.
+
+```powershell
+.\Compress-Images.ps1 -Source "C:\zpiderdata\Images" -Overwrite -NoRecurse -MaxDimension 2000
+```
+
+Är bilden nedskalad gäller inte tröskeln `-MinGainPercent` — då är det måtten som är poängen,
+och resultatet behålls så länge filen inte blev större. En JPEG som redan ligger på målkvaliteten
+kodas ändå om när den ska skalas ned.
+
+Nedskalningen är det som ger mest, och den kräver inga verktyg alls. `73896-VHF-R.png`,
+7360x4912 och 9,6 MB, blev till 2000 px:
+
+| | Filstorlek |
+|---|---|
+| bara nedskalning, inga verktyg | 809 KB |
+| med `oxipng` | 701 KB |
+| med `-LossyPng` | 202 KB |
+
 ## Tester
 
 ```

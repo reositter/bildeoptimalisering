@@ -27,6 +27,11 @@ param(
     [ValidateRange(1, 90)]
     [int]$MinGainPercent = 10,
 
+    # Lengste side i piksler. 0 lar bildestorrelsen sta. Bilder som alt er mindre
+    # skaleres aldri opp, og hoyde/bredde-forholdet beholdes.
+    [ValidateScript({ $_ -eq 0 -or ($_ -ge 100 -and $_ -le 20000) })]
+    [int]$MaxDimension = 0,
+
     # Ta bare filene som ligger rett i kildemappen. Undermapper hoppes over.
     [switch]$NoRecurse,
 
@@ -313,6 +318,8 @@ function Invoke-ImageAnalysis {
         NewBytes      = $Original.Length
         Data          = $null
         SourceQuality = $null
+        Dimension     = $null
+        NewDimension  = $null
         Error         = $null
     }
 
@@ -341,7 +348,24 @@ function Invoke-ImageAnalysis {
         # EXIF-rotasjon folger ikke med, og bildet ville blitt vist dreid.
         if ((Get-ExifOrientation -Image $image) -gt 1) { $result.Outcome = 'Rotated'; return $result }
 
-        if ($isJpeg) {
+        $targetWidth = $image.Width
+        $targetHeight = $image.Height
+
+        if ($script:MaxDimension -gt 0) {
+            $longestSide = [Math]::Max($image.Width, $image.Height)
+            if ($longestSide -gt $script:MaxDimension) {
+                $scale = $script:MaxDimension / $longestSide
+                $targetWidth = [Math]::Max(1, [int][Math]::Round($image.Width * $scale))
+                $targetHeight = [Math]::Max(1, [int][Math]::Round($image.Height * $scale))
+            }
+        }
+
+        $isResized = $targetWidth -ne $image.Width
+        $result.Dimension = "$($image.Width)x$($image.Height)"
+        $result.NewDimension = "${targetWidth}x${targetHeight}"
+
+        # Kvaliteten sier ingenting nar bildet uansett skal skaleres ned.
+        if ($isJpeg -and -not $isResized) {
             $sourceQuality = Get-JpegQuality -Data $Original
             $result.SourceQuality = $sourceQuality
             if ($null -ne $sourceQuality -and $sourceQuality -le $TargetQuality) {
@@ -349,10 +373,13 @@ function Invoke-ImageAnalysis {
                 return $result
             }
         }
+        elseif ($isJpeg) {
+            $result.SourceQuality = Get-JpegQuality -Data $Original
+        }
 
         # PNG gar til de eksterne verktoyene, som jobber pa originalfilen. En omtegning
         # gjennom System.Drawing ville bare kastet bort det de har a hente.
-        if (-not $isJpeg -and $script:OxipngExe) {
+        if (-not $isJpeg -and $script:OxipngExe -and -not $isResized) {
             $image.Dispose(); $image = $null
             $stream.Dispose(); $stream = $null
 
@@ -370,7 +397,7 @@ function Invoke-ImageAnalysis {
             return $result
         }
 
-        $bitmap = New-Object System.Drawing.Bitmap $image.Width, $image.Height, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+        $bitmap = New-Object System.Drawing.Bitmap $targetWidth, $targetHeight, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
         $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
 
         # Hvit bunn bare for JPEG, som mangler alfakanal. En gjennomsiktig PNG skal forbli gjennomsiktig.
@@ -380,7 +407,7 @@ function Invoke-ImageAnalysis {
         $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
         $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
         $graphics.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
-        $graphics.DrawImage($image, 0, 0, $image.Width, $image.Height)
+        $graphics.DrawImage($image, 0, 0, $targetWidth, $targetHeight)
         $graphics.Dispose(); $graphics = $null
 
         $output = New-Object System.IO.MemoryStream
@@ -399,11 +426,25 @@ function Invoke-ImageAnalysis {
 
         $encoded = $output.ToArray()
 
-        # Gevinsten ma overstige terskelen, ellers er originalet det bedre valget.
-        $limit = $Original.Length * (100.0 - $MinGain) / 100.0
-        if ($encoded.Length -ge $limit) {
-            $result.Outcome = 'NoGain'
-            return $result
+        # Den nedskalerte PNG-en er skrevet av System.Drawing og har mye a hente.
+        if (-not $isJpeg -and $script:OxipngExe) {
+            $encoded = Invoke-PngOptimization -Original $encoded
+        }
+
+        # Er bildet skalert ned, er det storrelsen som er poenget, ikke bytene.
+        # Ellers ma gevinsten overstige terskelen for a vaere verdt et tap.
+        if ($isResized) {
+            if ($encoded.Length -ge $Original.Length) {
+                $result.Outcome = 'NoGain'
+                return $result
+            }
+        }
+        else {
+            $limit = $Original.Length * (100.0 - $MinGain) / 100.0
+            if ($encoded.Length -ge $limit) {
+                $result.Outcome = 'NoGain'
+                return $result
+            }
         }
 
         $result.Outcome = 'Optimized'
@@ -585,6 +626,7 @@ else {
     Write-Host "  PNG:         ingen oxipng.exe funnet - PNG lates urort" -ForegroundColor Yellow
 }
 Write-Host "  Kvalitet:    $Quality"
+if ($MaxDimension -gt 0) { Write-Host "  Maks side:   $MaxDimension px" }
 Write-Host "  Min gevinst: $MinGainPercent %"
 if ($WhatIf) { Write-Host "  TESTKJORING - ingen filer endres" -ForegroundColor Magenta }
 Write-Host ""
@@ -627,6 +669,8 @@ foreach ($image in $images) {
             Fil            = Protect-CsvValue $relativePath
             Status         = $analysis.Outcome
             Kvalitet       = $analysis.SourceQuality
+            Storrelse      = $analysis.Dimension
+            NyStorrelse    = $analysis.NewDimension
             NuvarendeBytes = $analysis.OriginalBytes
             MuligeBytes    = $analysis.NewBytes
             SparteBytes    = $analysis.OriginalBytes - $analysis.NewBytes
@@ -655,7 +699,10 @@ foreach ($image in $images) {
             $newBytes += $analysis.NewBytes
 
             $savedPercent = (1 - $analysis.NewBytes / $analysis.OriginalBytes) * 100
-            Write-Host ("  {0,-55} {1,6:F1} % mindre" -f $relativePath, $savedPercent) -ForegroundColor Green
+            $note = if ($analysis.NewDimension -ne $analysis.Dimension) {
+                "  {0} -> {1}" -f $analysis.Dimension, $analysis.NewDimension
+            } else { '' }
+            Write-Host ("  {0,-55} {1,6:F1} % mindre{2}" -f $relativePath, $savedPercent, $note) -ForegroundColor Green
 
             continue
         }
