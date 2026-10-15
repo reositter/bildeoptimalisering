@@ -72,6 +72,13 @@ omkodningen blir lika stor eller större och bilden lämnas orörd. Verklig PNG-
 vinst i procent, sorterad med största besparingen överst. Semikolonseparerad, så Excel öppnar den
 direkt.
 
+`-NoRecurse` tar bara bilderna som ligger rakt i källmappen och hoppar över undermapparna.
+Utan den tas undermapparna alltid med.
+
+```powershell
+.\Compress-Images.ps1 -Source "C:\zpiderdata\Images" -Overwrite -NoRecurse -WhatIf -ReportPath "C:\temp\rapport.csv"
+```
+
 Utan `-BackupFolder` frågar skriptet efter en bekräftelse innan det skriver över något.
 
 `jamo\` innehåller två engångsskript från Jamo-körningen i februari 2026, med hårdkodade

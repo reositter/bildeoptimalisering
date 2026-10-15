@@ -27,6 +27,9 @@ param(
     [ValidateRange(1, 90)]
     [int]$MinGainPercent = 10,
 
+    # Ta bare filene som ligger rett i kildemappen. Undermapper hoppes over.
+    [switch]$NoRecurse,
+
     # Analyser og rapporter uten a rore en eneste fil.
     [switch]$WhatIf,
 
@@ -310,10 +313,10 @@ function Get-RelativePath {
     # .NET Framework, som Windows PowerShell 5.1 kjorer pa, har ingen Path.GetRelativePath.
     param([string]$Root, [string]$Path)
 
-    $normalizedRoot = [System.IO.Path]::GetFullPath($Root).TrimEnd('')
+    $normalizedRoot = [System.IO.Path]::GetFullPath($Root).TrimEnd('\')
     $fullPath = [System.IO.Path]::GetFullPath($Path)
 
-    if (-not $fullPath.StartsWith($normalizedRoot + '', [StringComparison]::OrdinalIgnoreCase)) {
+    if (-not $fullPath.StartsWith($normalizedRoot + '\', [StringComparison]::OrdinalIgnoreCase)) {
         return [System.IO.Path]::GetFileName($fullPath)
     }
 
@@ -442,12 +445,16 @@ if ($Overwrite) {
 } else {
     Write-Host "  Modus:       kopierer til $Destination"
 }
+if ($NoRecurse) { Write-Host "  Omfang:      bare filer rett i kildemappen" }
 Write-Host "  Kvalitet:    $Quality"
 Write-Host "  Min gevinst: $MinGainPercent %"
 if ($WhatIf) { Write-Host "  TESTKJORING - ingen filer endres" -ForegroundColor Magenta }
 Write-Host ""
 
-$images = Get-ChildItem -LiteralPath $Source -Recurse -File |
+$searchParameters = @{ LiteralPath = $Source; File = $true }
+if (-not $NoRecurse) { $searchParameters.Recurse = $true }
+
+$images = Get-ChildItem @searchParameters |
     Where-Object { $script:ImageExtensions -contains $_.Extension.ToLowerInvariant() }
 
 if ($images.Count -eq 0) {
